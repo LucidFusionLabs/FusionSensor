@@ -32,7 +32,7 @@
 #include "ml/hmm.h"
 #include "speech/speech.h"   
 #include "speech/voice.h"
-#include "fs/fs.h"
+#include "fs.h"
 #include "speech/aed.h"
 
 namespace LFL {

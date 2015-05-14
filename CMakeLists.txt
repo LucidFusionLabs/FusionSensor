@@ -22,7 +22,7 @@ else(LFL_ANDROID)
 endif(LFL_ANDROID)
 
 lfl_project(fv)
-add_subdirectory(../lfapp ${CMAKE_CURRENT_BINARY_DIR}/lfapp_obj)
+add_subdirectory(../core/lfapp ${CMAKE_CURRENT_BINARY_DIR}/lfapp_obj)
 add_definitions(${LFAPP_DEF})
 include_directories(${LFAPP_INCLUDE})
 
@@ -31,6 +31,10 @@ if(LFL_ANDROID)
 else(LFL_ANDROID)
     add_executable(fv fv.cpp ${LFL_RECOGNITION_SOURCE})
     target_link_libraries(fv ${LFAPP_LIB})
-    lfapp_post_build_start(fv FusionViewer)
+    lfapp_post_build_start(fv fv FusionViewer)
 endif(LFL_ANDROID)
+
+add_executable(fs fs.cpp ${LFL_RECOGNITION_SOURCE})
+target_link_libraries(fs ${LFAPP_LIB})
+lfapp_post_build_start(fs fs FusionServer)
 
