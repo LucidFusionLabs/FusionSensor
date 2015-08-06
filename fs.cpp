@@ -289,8 +289,8 @@ struct SpeechDecodeServer : public HTTPServer::SessionResource {
     RecognitionModel *model; int featureRate, sampleSecs;
     SpeechDecodeServer(RecognitionModel *Model, int FR, int SS) : model(Model), featureRate(FR), sampleSecs(SS) {}
 
-    HTTPServer::Resource *open() { return new SpeechDecodeSession(model, featureRate, sampleSecs); }
-    void close(HTTPServer::Resource *resource) { delete resource; }
+    HTTPServer::Resource *Open() { return new SpeechDecodeSession(model, featureRate, sampleSecs); }
+    void Close(HTTPServer::Resource *resource) { delete resource; }
 };
 
 int FusionServer(int argc, const char **argv) {

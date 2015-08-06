@@ -376,7 +376,8 @@ struct AudioGUI : public GUI {
         record_button(this, DrawableNop(), norm, "monitor", MouseController::CB([&](){ myMonitor = !myMonitor; })) {}
 
     int Frame(LFL::Window *W, unsigned clocks, unsigned samples, bool cam_sample, int flag) {
-        if (!myMonitor && !W->events.gui && !app->audio.Out.size() && !last_audio_count && !decode && !screen->console->active) skip = 1;
+      if (!myMonitor && !W->events.gui && !app->audio.Out.size() && !last_audio_count && !decode &&
+          (!screen->lfapp_console || !screen->lfapp_console->active)) skip = 1;
 
         last_audio_count = app->audio.Out.size();
         if (0 && skip && !(flag & LFApp::Frame::DontSkip)) {
@@ -581,11 +582,12 @@ void SetMyTab(int a) {
 }
 
 int Frame(LFL::Window *W, unsigned clicks, unsigned mic_samples, bool cam_sample, int flag) {
+    W->binds->Repeat(clicks);
 
     if (AED) AED->update(mic_samples);
     if (liveSG) liveSG->Update(mic_samples);
 #ifdef LFL_FFMPEG
-    if (stream) stream->update(mic_samples, cam_sample);
+    if (stream) stream->Update(mic_samples, cam_sample);
 #endif
 
     return fv_gui->Frame(W, clicks, mic_samples, cam_sample, flag);
@@ -600,13 +602,15 @@ extern "C" int main(int argc, const char *argv[]) {
 	app->logfilename = StrCat(LFAppDownloadDir(), "fv.txt");
 	screen->width = 640;
 	screen->height = 480;
-    screen->caption = "fusion viewer";
-    FLAGS_target_fps = 50;
-	FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = true;
+  screen->caption = "fusion viewer";
+  FLAGS_target_fps = 50;
+  FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = true;
+  FLAGS_font_engine = "atlas";
+  FLAGS_default_font = "Nobile.ttf";
 
 	if (app->Create(argc, argv, __FILE__)) { app->Free(); return -1; }
-    if (app->Init()) { app->Free(); return -1; }
-    screen->gd->default_draw_mode = DrawMode::_3D;
+  if (app->Init()) { app->Free(); return -1; }
+  screen->gd->default_draw_mode = DrawMode::_3D;
 
 	//  asset.Add(Asset(name,          texture,          scale, translate, rotate, geometry     0, 0, 0));
 	asset.Add(Asset("axis", "", 0, 0, 0, 0, 0, 0, 0, bind(&glAxis, _1, _2)));
@@ -650,69 +654,69 @@ extern "C" int main(int argc, const char *argv[]) {
 	app->shell.command.push_back(Shell::Command("server", bind(&MyServer, _1)));
 	app->shell.command.push_back(Shell::Command("startcamera", bind(&MyStartCamera, _1)));
 
-    BindMap *binds = screen->binds = new BindMap();
+  BindMap *binds = screen->binds = new BindMap();
 	// binds->Add(Bind(key,            callback,         arg));
-	binds->Add(Bind(Key::Backquote, Bind::CB(bind([&](){ screen->console->Toggle(); }))));
-	binds->Add(Bind(Key::Quote,     Bind::CB(bind([&](){ screen->console->Toggle(); }))));
-    binds->Add(Bind(Key::Escape,    Bind::CB(bind(&Shell::quit,            &app->shell, vector<string>()))));
-    binds->Add(Bind(Key::Return,    Bind::CB(bind(&Shell::grabmode,        &app->shell, vector<string>()))));
-    binds->Add(Bind(Key::LeftShift, Bind::TimeCB(bind(&Entity::RollLeft,   screen->cam, _1))));
-    binds->Add(Bind(Key::Space,     Bind::TimeCB(bind(&Entity::RollRight,  screen->cam, _1))));
-    binds->Add(Bind('w',            Bind::TimeCB(bind(&Entity::MoveFwd,    screen->cam, _1))));
-    binds->Add(Bind('s',            Bind::TimeCB(bind(&Entity::MoveRev,    screen->cam, _1))));
-    binds->Add(Bind('a',            Bind::TimeCB(bind(&Entity::MoveLeft,   screen->cam, _1))));
-    binds->Add(Bind('d',            Bind::TimeCB(bind(&Entity::MoveRight,  screen->cam, _1))));
-    binds->Add(Bind('q',            Bind::TimeCB(bind(&Entity::MoveDown,   screen->cam, _1))));
-    binds->Add(Bind('e',            Bind::TimeCB(bind(&Entity::MoveUp,     screen->cam, _1))));
+	binds->Add(Bind(Key::Backquote, Bind::CB(bind(&Shell::console,         &app->shell, vector<string>()))));
+	binds->Add(Bind(Key::Quote,     Bind::CB(bind(&Shell::console,         &app->shell, vector<string>()))));
+  binds->Add(Bind(Key::Escape,    Bind::CB(bind(&Shell::quit,            &app->shell, vector<string>()))));
+  binds->Add(Bind(Key::Return,    Bind::CB(bind(&Shell::grabmode,        &app->shell, vector<string>()))));
+  binds->Add(Bind(Key::LeftShift, Bind::TimeCB(bind(&Entity::RollLeft,   screen->cam, _1))));
+  binds->Add(Bind(Key::Space,     Bind::TimeCB(bind(&Entity::RollRight,  screen->cam, _1))));
+  binds->Add(Bind('w',            Bind::TimeCB(bind(&Entity::MoveFwd,    screen->cam, _1))));
+  binds->Add(Bind('s',            Bind::TimeCB(bind(&Entity::MoveRev,    screen->cam, _1))));
+  binds->Add(Bind('a',            Bind::TimeCB(bind(&Entity::MoveLeft,   screen->cam, _1))));
+  binds->Add(Bind('d',            Bind::TimeCB(bind(&Entity::MoveRight,  screen->cam, _1))));
+  binds->Add(Bind('q',            Bind::TimeCB(bind(&Entity::MoveDown,   screen->cam, _1))));
+  binds->Add(Bind('e',            Bind::TimeCB(bind(&Entity::MoveUp,     screen->cam, _1))));
 
 #if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)
-    HTTPServer *httpd = new HTTPServer(4040, false);
-    if (app->network.Enable(httpd)) return -1;
-    httpd->AddURL("/favicon.ico", new HTTPServer::FileResource("./assets/icon.ico", "image/x-icon"));
+  HTTPServer *httpd = new HTTPServer(4040, false);
+  if (app->network.Enable(httpd)) return -1;
+  httpd->AddURL("/favicon.ico", new HTTPServer::FileResource("./assets/icon.ico", "image/x-icon"));
 
 #ifdef LFL_FFMPEG
-    stream = new HTTPServer::StreamResource("flv", 32000, 300000);
-    httpd->AddURL("/stream.flv", stream);
+  stream = new HTTPServer::StreamResource("flv", 32000, 300000);
+  httpd->AddURL("/stream.flv", stream);
 #endif
 
-    httpd->AddURL("/test.flv", new HTTPServer::FileResource("./assets/test.flv", "video/x-flv"));
-    httpd->AddURL("/mediaplayer.swf", new HTTPServer::FileResource("./assets/mediaplayer.swf", "application/x-shockwave-flash"));
+  httpd->AddURL("/test.flv", new HTTPServer::FileResource("./assets/test.flv", "video/x-flv"));
+  httpd->AddURL("/mediaplayer.swf", new HTTPServer::FileResource("./assets/mediaplayer.swf", "application/x-shockwave-flash"));
 
-    httpd->AddURL("/", new HTTPServer::StringResource("text/html; charset=UTF-8",
-        "<html><h1>Web Page</h1>\r\n"
-        "<a href=\"http://www.google.com\">google</a><br/>\r\n"
-        "<h2>stream</h2>\r\n"
-        "<embed src=\"/mediaplayer.swf\" width=\"320\" height=\"240\" \r\n"
-        "       allowscriptaccess=\"always\" allowfullscreen=\"true\" \r\n"
-        "       flashvars=\"width=320&height=240&file=/stream.flv\" />\r\n"
-        "</html>\r\n"));
+  httpd->AddURL("/", new HTTPServer::StringResource("text/html; charset=UTF-8",
+      "<html><h1>Web Page</h1>\r\n"
+      "<a href=\"http://www.google.com\">google</a><br/>\r\n"
+      "<h2>stream</h2>\r\n"
+      "<embed src=\"/mediaplayer.swf\" width=\"320\" height=\"240\" \r\n"
+      "       allowscriptaccess=\"always\" allowfullscreen=\"true\" \r\n"
+      "       flashvars=\"width=320&height=240&file=/stream.flv\" />\r\n"
+      "</html>\r\n"));
 
-    AcousticModelFile *model = new AcousticModelFile();
-    if (model->Open("AcousticModel", "./assets/")<0) { ERROR("am read ./assets/"); return -1; }
+  AcousticModelFile *model = new AcousticModelFile();
+  if (model->Open("AcousticModel", "./assets/")<0) { ERROR("am read ./assets/"); return -1; }
 
-    if (!(decodeModel = AcousticModel::fromModel1(model, true))) { ERROR("model create failed"); return -1; }
-    AcousticModel::toCUDA(model);
+  if (!(decodeModel = AcousticModel::fromModel1(model, true))) { ERROR("model create failed"); return -1; }
+  AcousticModel::toCUDA(model);
 
-    PronunciationDict::instance();
-    voice = new VoiceModel();
-    if (voice->read("./assets/")<0) { ERROR("voice read ./assets/"); return -1; }
+  PronunciationDict::instance();
+  voice = new VoiceModel();
+  if (voice->read("./assets/")<0) { ERROR("voice read ./assets/"); return -1; }
 #endif
 
-    scene.Add(new Entity("axis",  asset("axis")));
-    scene.Add(new Entity("grid",  asset("grid")));
-    scene.Add(new Entity("room",  asset("room")));
-    scene.Add(new Entity("arrow", asset("arrow"), v3(1,.24,1)));
+  scene.Add(new Entity("axis",  asset("axis")));
+  scene.Add(new Entity("grid",  asset("grid")));
+  scene.Add(new Entity("room",  asset("room")));
+  scene.Add(new Entity("arrow", asset("arrow"), v3(1,.24,1)));
 
-    liveSG = new LiveSpectogram();
-    liveSG->XForm("mel");
+  liveSG = new LiveSpectogram();
+  liveSG->XForm("mel");
 
-    speech_client_last = FLAGS_speech_client;
-    ReloadAED(&AED);
-    liveCam = new LiveCamera();
-    audio_gui = new AudioGUI(screen);
-    fv_gui = new FVGUI(screen);
-    fullscreen_gui = new FullscreenGUI(screen);
-    SetMyTab(1);
+  speech_client_last = FLAGS_speech_client;
+  ReloadAED(&AED);
+  liveCam = new LiveCamera();
+  audio_gui = new AudioGUI(screen);
+  fv_gui = new FVGUI(screen);
+  fullscreen_gui = new FullscreenGUI(screen);
+  SetMyTab(1);
 
-    return app->Main();
+  return app->Main();
 }
