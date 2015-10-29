@@ -108,7 +108,7 @@ struct LiveSpectogram {
 
         while(samples_available >= samples_processed + FLAGS_feat_window) {
             const double *last = handle.Read(-1)->row(0);
-            RingBuf::Handle L(app->audio.IL, app->audio.RL.next-Behind(), FLAGS_feat_window);
+            RingBuf::Handle L(app->audio->IL, app->audio->RL.next-Behind(), FLAGS_feat_window);
 
             Matrix *Frame, *FFT;
             Frame = FFT = Spectogram(&L, transform ? 0 : handle.Write(), FLAGS_feat_window, FLAGS_feat_hop, FLAGS_feat_window, 0, PowerDomain::abs);
@@ -140,7 +140,7 @@ struct LiveSpectogram {
                 static int decimate = 10;
                 int delay = Behind(), samples = feature_rate*FLAGS_feat_hop*FLAGS_sample_secs;
                 if (onoff) {
-                    RingBuf::Handle B(app->audio.IL, app->audio.RL.next-delay, samples);
+                    RingBuf::Handle B(app->audio->IL, app->audio->RL.next-delay, samples);
                     Waveform::Decimated(win.Dimension(), &Color::white, &B, decimate).Draw(win); 
                 }
                 else {
@@ -189,7 +189,7 @@ struct LiveCamera {
 
     Asset *Input() {
         Asset *cam = 0;
-        if (!cam) cam = app->assets.movie_playing ? &app->assets.movie_playing->video : 0;
+        if (!cam) cam = app->assets->movie_playing ? &app->assets->movie_playing->video : 0;
         if (!cam) cam = FLAGS_lfapp_camera ? asset("camera") : 0;
         if (!cam) cam = asset("browser");
         return cam;
@@ -201,8 +201,8 @@ struct LiveCamera {
 
         if (FLAGS_lfapp_camera && cam == asset("camera")) {
             /* update camera buffer */
-            cam->tex.UpdateBuffer(app->camera.image, point(FLAGS_camera_image_width, FLAGS_camera_image_height),
-                                  app->camera.image_format, app->camera.image_linesize, Texture::Flag::Resample);
+            cam->tex.UpdateBuffer(app->camera->image, point(FLAGS_camera_image_width, FLAGS_camera_image_height),
+                                  app->camera->image_format, app->camera->image_linesize, Texture::Flag::Resample);
 
             /* flush camera buffer */
             cam->tex.Bind();
@@ -264,7 +264,7 @@ void MySnap(const vector<string> &args) {
     transcript.clear();
     Replace(&segments, (PhoneticSegmentationGUI*)0);
 
-    app->audio.Snapshot(sa);
+    app->audio->Snapshot(sa);
     MyDraw(args);
 
     if (AED && AED->sink) {
@@ -338,13 +338,13 @@ void MySynth(const vector<string> &args) {
     if (!synth) { ERROR("synth ret 0"); return; }
     INFO("synth ", synth->ring.size);
     RingBuf::Handle B(synth);
-    app->audio.QueueMixBuf(&B);
+    app->audio->QueueMixBuf(&B);
     delete synth;
 }
 
 void MyResynth(const vector<string> &args) {
     SoundAsset *sa = soundasset(args.size()?args[0]:"snap");
-    if (sa) { resynthesize(&app->audio, sa); }
+    if (sa) { resynthesize(app->audio, sa); }
 }
 
 void MySpectogramTransform(const vector<string> &args) { liveSG->XForm(IndexOrDefault(args, 0).c_str()); }
@@ -358,38 +358,29 @@ void MyStartCamera(const vector<string>&) {
     if (FLAGS_lfapp_camera) return INFO("camera already started");
     FLAGS_lfapp_camera = true;
 
-    if (app->camera.Init()) { FLAGS_lfapp_camera = false; return INFO("camera init failed"); }
+    if (app->camera->Init()) { FLAGS_lfapp_camera = false; return INFO("camera init failed"); }
     INFO("camera started");
     liveCam = new LiveCamera();
 }
 
 struct AudioGUI : public GUI {
-    bool monitor_hover=0, decode=0, last_decode=0, skip=0;
+    bool monitor_hover=0, decode=0, last_decode=0;
     int last_audio_count=1;
     Font *norm, *text;
     Widget::Button play_button, decode_button, record_button;
     AudioGUI(Window *W) : GUI(W),
         norm(Fonts::Get(FLAGS_default_font, "", 12, Color::grey70)),
         text(Fonts::Get(FLAGS_default_font, "", 8,  Color::grey80)),
-        play_button  (this, DrawableNop(), norm, "play",    MouseController::CB([&](){ if (!app->audio.Out.size()) app->shell.play(vector<string>(1,"snap")); })),
+        play_button  (this, DrawableNop(), norm, "play",    MouseController::CB([&](){ if (!app->audio->Out.size()) app->shell.play(vector<string>(1,"snap")); })),
         decode_button(this, DrawableNop(), norm, "decode",  MouseController::CB([&](){ decode = true; })),
         record_button(this, DrawableNop(), norm, "monitor", MouseController::CB([&](){ myMonitor = !myMonitor; })) {}
 
-    int Frame(LFL::Window *W, unsigned clocks, unsigned samples, bool cam_sample, int flag) {
-      if (!myMonitor && !W->events.gui && !app->audio.Out.size() && !last_audio_count && !decode &&
-          (!screen->lfapp_console || !screen->lfapp_console->active)) skip = 1;
-
-        last_audio_count = app->audio.Out.size();
-        if (0 && skip && !(flag & LFApp::Frame::DontSkip)) {
-            if (segments) segments->Activate();
-            Activate();
-            return -1;
-        }
-
+    int Frame(LFL::Window *W, unsigned clicks, int flag) {
+        last_audio_count = app->audio->Out.size();
         if (decode && last_decode) { if (!myMonitor) MyDecode(vector<string>(1, "snap")); decode=0; }
         last_decode = decode;
 
-        if (auto b = play_button  .GetDrawBox()) b->drawable = &asset(app->audio.Out.size() ? "but1" : "but0")->tex;
+        if (auto b = play_button  .GetDrawBox()) b->drawable = &asset(app->audio->Out.size() ? "but1" : "but0")->tex;
         if (auto b = decode_button.GetDrawBox()) b->drawable = &asset((decode || decoding)  ? "but1" : "but0")->tex;
         if (auto b = record_button.GetDrawBox()) b->drawable = &asset(myMonitor ? (monitor_hover ? "onoff1hover" : "onoff1") :
                                                                                   (monitor_hover ? "onoff0hover" : "onoff0"))->tex;
@@ -408,8 +399,8 @@ struct AudioGUI : public GUI {
         asset("sgloss")->tex.Draw(sb);
 
         /* progress bar */
-        if (app->audio.Out.size() && !myMonitor) {
-            float percent=1-(float)(app->audio.Out.size()+feat_progressbar_c*FLAGS_sample_rate*FLAGS_chans_out)/app->audio.outlast;
+        if (app->audio->Out.size() && !myMonitor) {
+            float percent=1-(float)(app->audio->Out.size()+feat_progressbar_c*FLAGS_sample_rate*FLAGS_chans_out)/app->audio->outlast;
             liveSG->ProgressBar(si, percent);
         }
 
@@ -426,7 +417,7 @@ struct AudioGUI : public GUI {
 
         /* f0 */
         if (0) {
-            RingBuf::Handle f0in(app->audio.IL, app->audio.RL.next-FLAGS_feat_window, FLAGS_feat_window);
+            RingBuf::Handle f0in(app->audio->IL, app->audio->RL.next-FLAGS_feat_window, FLAGS_feat_window);
             text->Draw(StringPrintf("hz %.0f", FundamentalFrequency(&f0in, FLAGS_feat_window, 0)), point(screen->width*.85, screen->height*.05));
         }
 
@@ -452,11 +443,11 @@ struct AudioGUI : public GUI {
     }
 } *audio_gui;
 
-int VideoFrame(LFL::Window *W, unsigned clocks, unsigned samples, bool cam_sample, int flag) {
+int VideoFrame(LFL::Window *W, unsigned clocks, int flag) {
     screen->gd->DrawMode(DrawMode::_2D);
 
     if (liveCam) {
-        if (cam_sample || app->assets.movie_playing) liveCam->Update();
+        if (app->camera->have_sample || app->assets->movie_playing) liveCam->Update();
 
         float yp=0.5, ys=0.5, xbdr=0.05, ybdr=0.07;
         Box st = screen->Box(0, .5, 1, ys, xbdr+0.04, ybdr+0.035, xbdr+0.04, .01);
@@ -469,7 +460,7 @@ int VideoFrame(LFL::Window *W, unsigned clocks, unsigned samples, bool cam_sampl
     return 0;
 }
 
-int RoomModelFrame(LFL::Window *W, unsigned clicks, unsigned samples, bool cam_sample, int flag) {
+int RoomModelFrame(LFL::Window *W, unsigned clicks, int flag) {
     screen->cam->Look();
     scene.Get("arrow")->YawRight(clicks);	
     scene.Draw(&asset.vec);
@@ -490,7 +481,7 @@ struct FullscreenGUI : public GUI {
     decode_icon      (this, 0, 0, "", MouseController::CB()),
     fullscreen_button(this, 0, 0, "", MouseController::CB([&](){ decode=1; })) {}
 
-    int Frame(LFL::Window *W, unsigned clicks, unsigned samples, bool cam_sample, int flag) {
+    int Frame(LFL::Window *W, unsigned clicks, int flag) {
         if (myMonitor) monitorcount++;
         else monitorcount = 0;
 
@@ -545,7 +536,7 @@ struct FVGUI : public GUI {
     tab2(this, 0, font, "video gui",  MouseController::CB(bind(&SetMyTab, 2))), 
     tab3(this, 0, font, "room model", MouseController::CB(bind(&SetMyTab, 3))) { Activate(); }
 
-    int Frame(LFL::Window *W, unsigned clicks, unsigned samples, bool cam_sample, int flag) {
+    int Frame(LFL::Window *W, unsigned clicks, int flag) {
 #if defined(LFL_IPHONE) || defined(LFL_ANDROID)
         int orientation = NativeWindowOrientation();
         bool orientation_fs = orientation == 5 || orientation == 4 || orientation == 3;
@@ -554,10 +545,10 @@ struct FVGUI : public GUI {
         if (!orientation_fs && fullscreen) myTab = 1;
 #endif
         int ret;
-        if      (myTab == 1) ret = audio_gui->Frame(W, clicks, samples, cam_sample, flag);
-        else if (myTab == 2) ret = VideoFrame(W, clicks, samples, cam_sample, flag);
-        else if (myTab == 3) ret = RoomModelFrame(W, clicks, samples, cam_sample, flag);
-        else if (myTab == 4) ret = fullscreen_gui->Frame(W, clicks, samples, cam_sample, flag);
+        if      (myTab == 1) ret = audio_gui->Frame(W, clicks, flag);
+        else if (myTab == 2) ret = VideoFrame(W, clicks, flag);
+        else if (myTab == 3) ret = RoomModelFrame(W, clicks, flag);
+        else if (myTab == 4) ret = fullscreen_gui->Frame(W, clicks, flag);
         if (ret < 0) return ret;
 
         screen->gd->DrawMode(DrawMode::_2D);
@@ -581,16 +572,17 @@ void SetMyTab(int a) {
     fullscreen_gui->active = myTab == 4;
 }
 
-int Frame(LFL::Window *W, unsigned clicks, unsigned mic_samples, bool cam_sample, int flag) {
+int Frame(LFL::Window *W, unsigned clicks, int flag) {
     W->binds->Repeat(clicks);
 
+    int mic_samples = app->audio->mic_samples;
     if (AED) AED->update(mic_samples);
     if (liveSG) liveSG->Update(mic_samples);
 #ifdef LFL_FFMPEG
-    if (stream) stream->Update(mic_samples, cam_sample);
+    if (stream) stream->Update(mic_samples, app->camera->have_sample);
 #endif
 
-    return fv_gui->Frame(W, clicks, mic_samples, cam_sample, flag);
+    return fv_gui->Frame(W, clicks, flag);
 }
 
 }; // namespace LFL
@@ -607,6 +599,7 @@ extern "C" int main(int argc, const char *argv[]) {
   FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = true;
   FLAGS_font_engine = "atlas";
   FLAGS_default_font = "Nobile.ttf";
+  FLAGS_default_font_flag = 0;
 
 	if (app->Create(argc, argv, __FILE__)) { app->Free(); return -1; }
   if (app->Init()) { app->Free(); return -1; }
@@ -671,7 +664,7 @@ extern "C" int main(int argc, const char *argv[]) {
 
 #if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)
   HTTPServer *httpd = new HTTPServer(4040, false);
-  if (app->network.Enable(httpd)) return -1;
+  if (app->network->Enable(httpd)) return -1;
   httpd->AddURL("/favicon.ico", new HTTPServer::FileResource("./assets/icon.ico", "image/x-icon"));
 
 #ifdef LFL_FFMPEG

@@ -322,7 +322,7 @@ int FusionServer(int argc, const char **argv) {
     }
 
     HTTPServer httpd(4044, FLAGS_ssl);
-    if (app->network.Enable(&httpd)) return -1;
+    if (app->network->Enable(&httpd)) return -1;
     httpd.AddURL("/favicon.ico", new HTTPServer::FileResource("./assets/icon.ico", "image/x-icon"));
 
     httpd.AddURL("/sink", new SpeechDecodeServer(&recognize, FLAGS_sample_rate/FLAGS_feat_hop, 3));
