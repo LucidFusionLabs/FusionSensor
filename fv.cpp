@@ -108,7 +108,7 @@ struct LiveSpectogram {
 
     while(samples_available >= samples_processed + FLAGS_feat_window) {
       const double *last = handle.Read(-1)->row(0);
-      RingBuf::Handle L(app->audio->IL, app->audio->RL.next-Behind(), FLAGS_feat_window);
+      RingBuf::Handle L(app->audio->IL.get(), app->audio->RL.next-Behind(), FLAGS_feat_window);
 
       Matrix *Frame, *FFT;
       Frame = FFT = Spectogram(&L, transform ? 0 : handle.Write(), FLAGS_feat_window, FLAGS_feat_hop, FLAGS_feat_window, 0, PowerDomain::abs);
@@ -140,7 +140,7 @@ struct LiveSpectogram {
         static int decimate = 10;
         int delay = Behind(), samples = feature_rate*FLAGS_feat_hop*FLAGS_sample_secs;
         if (onoff) {
-          RingBuf::Handle B(app->audio->IL, app->audio->RL.next-delay, samples);
+          RingBuf::Handle B(app->audio->IL.get(), app->audio->RL.next-delay, samples);
           Waveform::Decimated(win.Dimension(), &Color::white, &B, decimate).Draw(win); 
         }
         else {
@@ -417,7 +417,7 @@ struct AudioGUI : public GUI {
 
     /* f0 */
     if (0) {
-      RingBuf::Handle f0in(app->audio->IL, app->audio->RL.next-FLAGS_feat_window, FLAGS_feat_window);
+      RingBuf::Handle f0in(app->audio->IL.get(), app->audio->RL.next-FLAGS_feat_window, FLAGS_feat_window);
       text->Draw(StringPrintf("hz %.0f", FundamentalFrequency(&f0in, FLAGS_feat_window, 0)), point(screen->width*.85, screen->height*.05));
     }
 
@@ -629,7 +629,7 @@ extern "C" int main(int argc, const char *argv[]) {
 	asset.Load();
 	app->shell.assets = &asset;
 
-	//  soundasset.Add(SoundAsset(name,   filename,   ringbuf,                                          channels, sample_rate,       seconds           ));
+	//  soundasset.Add(SoundAsset(name,   filename,   ringbuf,  channels, sample_rate,       seconds           ));
 	soundasset.Add(SoundAsset("draw", "Draw.wav", 0, 0, 0, 0));
 	soundasset.Add(SoundAsset("snap", "", new RingBuf(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs));
 	soundasset.Load();
@@ -648,7 +648,7 @@ extern "C" int main(int argc, const char *argv[]) {
 	app->shell.command.push_back(Shell::Command("startcamera", bind(&MyStartCamera, _1)));
 
   BindMap *binds = screen->binds = new BindMap();
-	// binds->Add(Bind(key,            callback,         arg));
+	// binds->Add(Bind(key,         callback,         arg));
 	binds->Add(Bind(Key::Backquote, Bind::CB(bind(&Shell::console,         &app->shell, vector<string>()))));
 	binds->Add(Bind(Key::Quote,     Bind::CB(bind(&Shell::console,         &app->shell, vector<string>()))));
   binds->Add(Bind(Key::Escape,    Bind::CB(bind(&Shell::quit,            &app->shell, vector<string>()))));
@@ -665,15 +665,15 @@ extern "C" int main(int argc, const char *argv[]) {
 #if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)
   HTTPServer *httpd = new HTTPServer(4040, false);
   if (app->network->Enable(httpd)) return -1;
-  httpd->AddURL("/favicon.ico", new HTTPServer::FileResource("./assets/icon.ico", "image/x-icon"));
+  httpd->AddURL("/favicon.ico", new HTTPServer::FileResource(Asset::FileName("icon.ico"), "image/x-icon"));
 
 #ifdef LFL_FFMPEG
   stream = new HTTPServer::StreamResource("flv", 32000, 300000);
   httpd->AddURL("/stream.flv", stream);
 #endif
 
-  httpd->AddURL("/test.flv", new HTTPServer::FileResource("./assets/test.flv", "video/x-flv"));
-  httpd->AddURL("/mediaplayer.swf", new HTTPServer::FileResource("./assets/mediaplayer.swf", "application/x-shockwave-flash"));
+  httpd->AddURL("/test.flv", new HTTPServer::FileResource(Asset::FileName("test.flv"), "video/x-flv"));
+  httpd->AddURL("/mediaplayer.swf", new HTTPServer::FileResource(Asset::FileName("mediaplayer.swf"), "application/x-shockwave-flash"));
 
   httpd->AddURL("/", new HTTPServer::StringResource("text/html; charset=UTF-8",
       "<html><h1>Web Page</h1>\r\n"
@@ -685,14 +685,14 @@ extern "C" int main(int argc, const char *argv[]) {
       "</html>\r\n"));
 
   AcousticModelFile *model = new AcousticModelFile();
-  if (model->Open("AcousticModel", "./assets/")<0) { ERROR("am read ./assets/"); return -1; }
+  if (model->Open("AcousticModel", Asset::FileName("").c_str()) < 0) return ERRORv(-1, "am read ", Asset::FileName(""));
 
-  if (!(decodeModel = AcousticModel::FromModel1(model, true))) { ERROR("model create failed"); return -1; }
+  if (!(decodeModel = AcousticModel::FromModel1(model, true))) return ERRORv(-1, "model create failed");
   AcousticModel::ToCUDA(model);
 
   PronunciationDict::Instance();
   voice = new VoiceModel();
-  if (voice->Read("./assets/")<0) { ERROR("voice read ./assets/"); return -1; }
+  if (voice->Read(Asset::FileName("").c_str()) < 0) return ERRORv(-1, "voice read ", Asset::FileName(""));
 #endif
 
   scene.Add(new Entity("axis",  asset("axis")));
