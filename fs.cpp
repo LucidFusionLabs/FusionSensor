@@ -51,8 +51,8 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
   static const int DeltaWindow=7, NBest=1, MaxResponseWords=128, MaxResponseTranscript=1024;
 
   RecognitionModel *model;
-  FixedAlloc<65536*2> alloc;
-  FixedAlloc<32*1024*1024> once;
+  FixedAllocator<65536*2> alloc;
+  FixedAllocator<32*1024*1024> once;
   int feats_dim, feats_available, feats_normalized, feats_processed, feats_seqL, time_index;
   RingBuf inB, featB, varB, backtraceB, viterbiB;
   double *rollingMean, *rollingVariance;
@@ -69,8 +69,8 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
   varB      (feature_rate, feature_rate*FLAGS_sample_secs, feats_dim*sizeof(double),           &once),
   backtraceB(feature_rate, feature_rate*FLAGS_sample_secs, FLAGS_BeamWidth*sizeof(HMM::Token), &once),
   viterbiB  (feature_rate, feature_rate*FLAGS_sample_secs, sizeof(HMM::Token),                 &once),
-  rollingMean    ((double*)once.Malloc(sizeof(double)*feats_dim)),
-  rollingVariance((double*)once.Malloc(sizeof(double)*feats_dim)),
+  rollingMean    (FromVoid<double*>(once.Malloc(sizeof(double)*feats_dim))),
+  rollingVariance(FromVoid<double*>(once.Malloc(sizeof(double)*feats_dim))),
   transit(model, FLAGS_UseTransition), emit(model, &obptr, &transit), beam(model, 1, NBest, FLAGS_BeamWidth, &btptr)
   {
     memset(rollingMean,     0, sizeof(double)*feats_dim);
@@ -89,39 +89,42 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
   }
 
   void DeltaCoefficients(int D, int frame_n2, int frame, int frame_p2) {
-    Features::DeltaCoefficients(D, (double*)featB.Read(frame_n2), (double*)featB.Read(frame), (double*)featB.Read(frame_p2));
+    Features::DeltaCoefficients(D, FromVoid<double*>(featB.Read(frame_n2)), FromVoid<double*>(featB.Read(frame)),
+                                FromVoid<double*>(featB.Read(frame_p2)));
   }
 
   void DeltaDeltaCoefficients(int D, int frame_n3, int frame_n1, int frame, int frame_p1, int frame_p3) {
-    Features::DeltaDeltaCoefficients(D, (double*)featB.Read(frame_n3), (double*)featB.Read(frame_n1), (double*)featB.Read(frame),
-                                     (double*)featB.Read(frame_p1), (double*)featB.Read(frame_p3));
+    Features::DeltaDeltaCoefficients(D, FromVoid<double*>(featB.Read(frame_n3)), FromVoid<double*>(featB.Read(frame_n1)),
+                                     FromVoid<double*>(featB.Read(frame)), FromVoid<double*>(featB.Read(frame_p1)),
+                                     FromVoid<double*>(featB.Read(frame_p3)));
   }
 
   void PatchDeltaCoefficients(int D, int frame_in, int frame_out1, int frame_out2) {
-    Features::PatchDeltaCoefficients(D, &((double*)featB.Read(frame_in))[D], &((double*)featB.Read(frame_out1))[D], &((double*)featB.Read(frame_out2))[D]);
+    Features::PatchDeltaCoefficients(D, &FromVoid<double*>(featB.Read(frame_in))[D], &FromVoid<double*>(featB.Read(frame_out1))[D],
+                                     &FromVoid<double*>(featB.Read(frame_out2))[D]);
   }
 
   void PatchDeltaDeltaCoefficients(int D, int frame_in, int frame_out1, int frame_out2, int frame_out3) {
-    Features::PatchDeltaDeltaCoefficients(D, &((double*)featB.Read(frame_in))[D*2], &((double*)featB.Read(frame_out1))[D*2],
-                                          &((double*)featB.Read(frame_out2))[D*2], &((double*)featB.Read(frame_out3))[D*2]);
+    Features::PatchDeltaDeltaCoefficients(D, &FromVoid<double*>(featB.Read(frame_in))[D*2], &FromVoid<double*>(featB.Read(frame_out1))[D*2],
+                                          &FromVoid<double*>(featB.Read(frame_out2))[D*2], &FromVoid<double*>(featB.Read(frame_out3))[D*2]);
   }
 
   int DecodeFrame(int frame, bool init=false) {
     if (init) time_index = 0;
     int t = time_index++;
-    obptr.v = (double*)featB.Read(frame); 
-    btptr.v = (HMM::Token*)backtraceB.Read(frame);
+    obptr.v = FromVoid<double*>(featB.Read(frame)); 
+    btptr.v = FromVoid<HMM::Token*>(backtraceB.Read(frame));
     return HMM::Forward(&beam, &transit, &emit, &beam, &beam, 0, init, t);
   }
 
   HTTPServer::Response Request(Connection *, int method, const char *url, const char *args, const char *headers, const char *postdata, int postlen) {
 
     if (postlen < sizeof(AcousticEventHeader)) return HTTPServer::Response::_400;
-    AcousticEventHeader *AEH = (AcousticEventHeader *)postdata;
+    const AcousticEventHeader *AEH = FromVoid<const AcousticEventHeader*>(postdata);
 
     if (postlen != sizeof(AcousticEventHeader) + AEH->m * AEH->n * sizeof(float))
       if (AEH->m > featB.ring.size || AEH->n != feats_dim) return HTTPServer::Response::_400;        
-    float *featureData = (float*)(AEH+1);
+    const float *featureData = FromVoid<const float*>(AEH+1);
 
     StringPiece flushArg;
     if (args) HTTP::GrepURLArgs(args, 0, 1, "flush", &flushArg);
@@ -129,13 +132,13 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
     return Request<float>(featureData, AEH->m, AEH->n, AEH->timestamp, !AEH->m || flushArg.data());
   }
 
-  template <class X> HTTPServer::Response Request(X *featureData, int M, int N, long long timestamp, bool flush) {
+  template <class X> HTTPServer::Response Request(const X *featureData, int M, int N, long long timestamp, bool flush) {
     alloc.Reset();
 
     for (int i=0; i<M; i++) {
-      double *feat = (double*)featB.Write(RingBuf::Stamp, microseconds(timestamp+i));
-      double *in = (double*)inB.Write();
-      double *var = (double*)varB.Write();
+      double *feat = FromVoid<double*>(featB.Write(RingBuf::Stamp, microseconds(timestamp+i)));
+      double *in = FromVoid<double*>(inB.Write());
+      double *var = FromVoid<double*>(varB.Write());
       int rollingMeanSamples = FeatureRollingMeanSamples();
 
       for (int j=0; j<N; j++) {
@@ -155,25 +158,25 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
       }
 
       backtraceB.Write();
-      *(HMM::Token*)viterbiB.Write() = HMM::Token();
+      *FromVoid<HMM::Token*>(viterbiB.Write()) = HMM::Token();
       feats_available++;
     }
 
     if (Features::mean_normalization || Features::variance_normalization) {
-      double *rmean = (double*)alloc.Malloc(feats_dim*sizeof(double));
-      double *rvariance = (double*)alloc.Malloc(feats_dim*sizeof(double));
+      double *rmean = FromVoid<double*>(alloc.Malloc(feats_dim*sizeof(double)));
+      double *rvariance = FromVoid<double*>(alloc.Malloc(feats_dim*sizeof(double)));
       FeatureRollingMeanAndVariance(rmean, rvariance);
 
       for (/**/; feats_available > feats_normalized; feats_normalized++) {
-        double *feat = (double*)featB.Read(-feats_available+feats_normalized);
+        double *feat = FromVoid<double*>(featB.Read(-feats_available+feats_normalized));
         Features::MeanAndVarianceNormalization(feats_dim, feat, rmean, rvariance);
       }
     }
     else feats_normalized = feats_available;
 
-    AcousticEventHeader *response = (AcousticEventHeader*)alloc.Malloc(sizeof(AcousticEventHeader) + sizeof(float)*MaxResponseWords + MaxResponseTranscript);
+    AcousticEventHeader *response = FromVoid<AcousticEventHeader*>(alloc.Malloc(sizeof(AcousticEventHeader) + sizeof(float)*MaxResponseWords + MaxResponseTranscript));
     response->m = 0; response->n = 2;
-    float *responseV = (float*)(response+1);
+    float *responseV = FromVoid<float*>(response+1);
     int prior_feats_processed = feats_processed, decode_end, endseq=0, endindex;
 
     for (;;) {
@@ -268,7 +271,7 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
     if (transcript.size() > MaxResponseTranscript) { ERRORf("overflow %d > %d", transcript.size(), MaxResponseTranscript); return HTTPServer::Response::_400; }
     memcpy(&responseV[response->m*response->n], transcript.c_str(), transcript.size()+1);
 
-    return HTTPServer::Response("application/octet-stream", StringPiece((char*)response, sizeof(AcousticEventHeader) + response->m * response->n * sizeof(float) + transcript.size()+1));
+    return HTTPServer::Response("application/octet-stream", StringPiece(FromVoid<char*>(response), sizeof(AcousticEventHeader) + response->m * response->n * sizeof(float) + transcript.size()+1));
   }
 
   static void AddResponseWord(AcousticEventHeader *response, float *responseV, Recognizer::WordIter &iter, string &ts, string &ats, const char *annotation=0) {
@@ -304,25 +307,26 @@ int FusionServer(int argc, const char **argv) {
     sa.Load();
     if (!sa.wav) FATAL("load ", FLAGS_decode, " failed");
 
-    RingBuf::Handle B(sa.wav);
+    RingBuf::Handle B(sa.wav.get());
     Matrix *feat = Features::FromBuf(&B);
     SpeechDecodeSession *decoder = new SpeechDecodeSession(&recognize, FLAGS_sample_rate/FLAGS_feat_hop, 3);
     HTTPServer::Response response = decoder->Request<double>(feat->row(0), feat->M, feat->N, 0, true);
 
-    if (FLAGS_lfapp_debug) {
+    if (FLAGS_speech_recognition_debug) {
       INFO(FLAGS_decode, ": features(", feat->M, ")");
-      for (int i=0; i<feat->M; i++) Vector::Print((double*)decoder->featB.Ind(i), Features::Dimension()*3);
+      for (int i=0; i<feat->M; i++)
+        Vector::Print(FromVoid<const double*>(decoder->featB.Ind(i)), Features::Dimension()*3);
     }
 
-    AcousticEventHeader *AEH = (AcousticEventHeader*)response.content;
-    float *timestamp = (float*)(AEH+1);
-    const char *transcript = (char *)(timestamp + AEH->m * AEH->n);
+    const AcousticEventHeader *AEH = FromVoid<const AcousticEventHeader*>(response.content);
+    const float *timestamp = FromVoid<const float*>(AEH+1);
+    const char *transcript = FromVoid<const char*>(timestamp + AEH->m * AEH->n);
     INFO(FLAGS_decode, ": viterbi(", AEH->m, ") ", AEH->m ? transcript : "");
-    return app->Free();
+    return 0;
   }
 
   HTTPServer httpd(4044, FLAGS_ssl);
-  if (app->network->Enable(&httpd)) return -1;
+  if (app->net->Enable(&httpd)) return -1;
   httpd.AddURL("/favicon.ico", new HTTPServer::FileResource("./assets/icon.ico", "image/x-icon"));
 
   httpd.AddURL("/sink", new SpeechDecodeServer(&recognize, FLAGS_sample_rate/FLAGS_feat_hop, 3));
@@ -355,8 +359,8 @@ extern "C" int main(int argc, const char **argv) {
   if (argc>1) open_console = 1;
 #endif
 
-  if (app->Create(argc, argv, __FILE__)) { ERROR("lfapp init failed: ", strerror(errno)); return app->Free(); }
-  if (app->Init()) { ERROR("lfapp open failed: ", strerror(errno)); return app->Free(); }
+  if (app->Create(argc, argv, __FILE__)) return -1;
+  if (app->Init()) return -1;
 
   bool exit=0;
 #ifdef _WIN32
@@ -364,7 +368,7 @@ extern "C" int main(int argc, const char **argv) {
   if (uninstall) { service_uninstall(service_name); exit=1; }
 #endif
   if (FLAGS_fg) { return FusionServer(argc, argv); }
-  if (exit) return app->Free();
+  if (exit) return 0;
 
 #ifdef _WIN32
   string exedir(argv[0], DirNameLen(argv[0]));

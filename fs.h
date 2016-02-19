@@ -23,23 +23,21 @@ namespace LFL {
 struct AcousticEventHeader { long long timestamp; int m, n; };
 
 struct SpeechDecodeClient : public FeatureSink {
-  FixedAlloc<65536> alloc;
+  FixedAllocator<65536> alloc;
   Connection *conn=0;
   string host, path, flags;
   long long wrote=0, lastTimestamp=0;
   int flagstate=0;
+  Callback resetCB;
 
-  typedef void (*ResetCB)(void *arg);
-  ResetCB resetCB; void *resetArg; 
-
-  SpeechDecodeClient(ResetCB rcb=0, void *rarg=0) : resetCB(rcb), resetArg(rarg) {}
+  SpeechDecodeClient(const Callback &rcb=Callback()) : resetCB(rcb) {}
   ~SpeechDecodeClient() { Reset(); }
 
   void Reset() { if (conn) conn->SetError(); conn=0; host.clear(); path.clear(); flags.clear(); flagstate=0; }
 
   int Connect(const char *url) {
     Reset();
-    conn = Singleton<HTTPClient>::Get()->PersistentConnection(url, &host, &path, bind(&SpeechDecodeClient::HTTPClientResponseCB, this, _1, _2, _3, _4, _5));
+    conn = app->net->http_client->PersistentConnection(url, &host, &path, bind(&SpeechDecodeClient::HTTPClientResponseCB, this, _1, _2, _3, _4, _5));
     return 0;
   }
 
@@ -50,28 +48,28 @@ struct SpeechDecodeClient : public FeatureSink {
 
     if (flagstate == 0) {
       flagstate = 1;
-      if (HTTPClient::request(conn, HTTPServer::Method::GET, host.c_str(), "flags", "application/octet-stream", 0, 0, true) < 0) conn->SetError();
+      if (HTTPClient::WriteRequest(conn, HTTPServer::Method::GET, host.c_str(), "flags", "application/octet-stream", 0, 0, true) < 0) conn->SetError();
       return 0;
     }
     if (flagstate == 1) return 0;
 
     alloc.Reset();
     int len = sizeof(AcousticEventHeader) + sizeof(float) * feat->M * feat->N;
-    char *buf = (char *)alloc.Malloc(len);
+    char *buf = FromVoid<char*>(alloc.Malloc(len));
 
-    AcousticEventHeader *AEH = (AcousticEventHeader *)buf;
+    AcousticEventHeader *AEH = reinterpret_cast<AcousticEventHeader*>(buf);
     AEH->timestamp = timestamp;
     AEH->m = feat->M;
     AEH->n = feat->N;
 
-    float *v = (float *)(AEH+1);
+    float *v = reinterpret_cast<float*>(AEH+1);
     MatrixIter(feat) v[i*feat->N + j] = feat->row(i)[j];
 
     string url = path;
     if (flush) url = StrCat(path, "?flush=1");
 
     int lbw = conn->wb.size();
-    if (HTTPClient::request(conn, HTTPServer::Method::POST, host.c_str(), url.c_str(), "application/octet-stream", buf, len, true) < 0) {
+    if (HTTPClient::WriteRequest(conn, HTTPServer::Method::POST, host.c_str(), url.c_str(), "application/octet-stream", buf, len, true) < 0) {
       conn->SetError();
       return 0;
     }
@@ -87,13 +85,13 @@ struct SpeechDecodeClient : public FeatureSink {
 
     alloc.Reset();
     int len = sizeof(AcousticEventHeader);
-    char *buf = (char *)alloc.Malloc(len);
+    char *buf = FromVoid<char*>(alloc.Malloc(len));
 
-    AcousticEventHeader *AEH = (AcousticEventHeader *)buf;
+    AcousticEventHeader *AEH = reinterpret_cast<AcousticEventHeader*>(buf);
     memset(AEH, 0, sizeof(AcousticEventHeader));
 
     int lbw = conn->wb.size();
-    if (HTTPClient::request(conn, HTTPServer::Method::POST, host.c_str(), path.c_str(), "application/octet-stream", buf, len, true) < 0) {
+    if (HTTPClient::WriteRequest(conn, HTTPServer::Method::POST, host.c_str(), path.c_str(), "application/octet-stream", buf, len, true) < 0) {
       conn->SetError();
       return;
     }
@@ -112,21 +110,21 @@ struct SpeechDecodeClient : public FeatureSink {
       flagstate = 2;
       flags = string(content, content_length);
       AcousticModel::LoadFlags(flags.c_str());
-      if (resetCB) resetCB(resetArg);
+      if (resetCB) resetCB();
       return;
     }
 
-    AcousticEventHeader *AEH = (AcousticEventHeader*)content;
-    int AERlen = sizeof(AcousticEventHeader) + AEH->m * AEH->n * sizeof(float);
+    const AcousticEventHeader *AEHin = reinterpret_cast<const AcousticEventHeader*>(content);
+    int AERlen = sizeof(AcousticEventHeader) + AEHin->m * AEHin->n * sizeof(float);
     if (content_length < AERlen) { ERROR("corrupt response ", content_length, " < ", AERlen); return; }
 
     alloc.Reset();
-    AEH = (AcousticEventHeader*)alloc.Malloc(AERlen);
+    AcousticEventHeader *AEH = reinterpret_cast<AcousticEventHeader*>(alloc.Malloc(AERlen));
     memcpy(AEH, content, AERlen);
 
     if (!AEH->m || AEH->n != 2) return;
-    float *timestamp = (float *)(AEH+1);
-    const char *transcript = (char *)(content + AERlen);
+    float *timestamp = reinterpret_cast<float*>(AEH+1);
+    const char *transcript = content + AERlen;
     long long start = AEH->timestamp + timestamp[0];
 
     /* if rewrite clear space */
@@ -135,7 +133,7 @@ struct SpeechDecodeClient : public FeatureSink {
     string tsa;
     StringWordIter ts(transcript);
     for (int i=0; i<AEH->m; i++) {
-      string word = IterNextString(&ts);
+      string word = ts.NextString();
       if (ts.Done()) continue;
 
       long long ts = AEH->timestamp + timestamp[i*2], ts2 = AEH->timestamp + timestamp[i*2+1];
