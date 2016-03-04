@@ -16,19 +16,19 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "lfapp/lfapp.h"
-#include "lfapp/network.h"
-#include "lfapp/ipc.h"
-#include "ml/hmm.h"
-#include "speech/speech.h"
-#include "fs.h"
+#include "core/app/app.h"
+#include "core/app/network.h"
+#include "core/app/ipc.h"
+#include "core/ml/hmm.h"
+#include "core/speech/speech.h"
+#include "fs/fs.h"
 
-#include "ml/corpus.h"
-#include "ml/counter.h"
-#include "nlp/corpus.h"
-#include "nlp/lm.h"
-#include "speech/wfst.h"
-#include "speech/recognition.h"
+#include "core/ml/corpus.h"
+#include "core/ml/counter.h"
+#include "core/nlp/corpus.h"
+#include "core/nlp/lm.h"
+#include "core/speech/wfst.h"
+#include "core/speech/recognition.h"
 
 namespace LFL {
 #ifdef _WIN32
@@ -69,8 +69,8 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
   varB      (feature_rate, feature_rate*FLAGS_sample_secs, feats_dim*sizeof(double),           &once),
   backtraceB(feature_rate, feature_rate*FLAGS_sample_secs, FLAGS_BeamWidth*sizeof(HMM::Token), &once),
   viterbiB  (feature_rate, feature_rate*FLAGS_sample_secs, sizeof(HMM::Token),                 &once),
-  rollingMean    (FromVoid<double*>(once.Malloc(sizeof(double)*feats_dim))),
-  rollingVariance(FromVoid<double*>(once.Malloc(sizeof(double)*feats_dim))),
+  rollingMean    (static_cast<double*>(once.Malloc(sizeof(double)*feats_dim))),
+  rollingVariance(static_cast<double*>(once.Malloc(sizeof(double)*feats_dim))),
   transit(model, FLAGS_UseTransition), emit(model, &obptr, &transit), beam(model, 1, NBest, FLAGS_BeamWidth, &btptr)
   {
     memset(rollingMean,     0, sizeof(double)*feats_dim);
@@ -89,42 +89,42 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
   }
 
   void DeltaCoefficients(int D, int frame_n2, int frame, int frame_p2) {
-    Features::DeltaCoefficients(D, FromVoid<double*>(featB.Read(frame_n2)), FromVoid<double*>(featB.Read(frame)),
-                                FromVoid<double*>(featB.Read(frame_p2)));
+    Features::DeltaCoefficients(D, static_cast<double*>(featB.Read(frame_n2)), static_cast<double*>(featB.Read(frame)),
+                                static_cast<double*>(featB.Read(frame_p2)));
   }
 
   void DeltaDeltaCoefficients(int D, int frame_n3, int frame_n1, int frame, int frame_p1, int frame_p3) {
-    Features::DeltaDeltaCoefficients(D, FromVoid<double*>(featB.Read(frame_n3)), FromVoid<double*>(featB.Read(frame_n1)),
-                                     FromVoid<double*>(featB.Read(frame)), FromVoid<double*>(featB.Read(frame_p1)),
-                                     FromVoid<double*>(featB.Read(frame_p3)));
+    Features::DeltaDeltaCoefficients(D, static_cast<double*>(featB.Read(frame_n3)), static_cast<double*>(featB.Read(frame_n1)),
+                                     static_cast<double*>(featB.Read(frame)), static_cast<double*>(featB.Read(frame_p1)),
+                                     static_cast<double*>(featB.Read(frame_p3)));
   }
 
   void PatchDeltaCoefficients(int D, int frame_in, int frame_out1, int frame_out2) {
-    Features::PatchDeltaCoefficients(D, &FromVoid<double*>(featB.Read(frame_in))[D], &FromVoid<double*>(featB.Read(frame_out1))[D],
-                                     &FromVoid<double*>(featB.Read(frame_out2))[D]);
+    Features::PatchDeltaCoefficients(D, &static_cast<double*>(featB.Read(frame_in))[D], &static_cast<double*>(featB.Read(frame_out1))[D],
+                                     &static_cast<double*>(featB.Read(frame_out2))[D]);
   }
 
   void PatchDeltaDeltaCoefficients(int D, int frame_in, int frame_out1, int frame_out2, int frame_out3) {
-    Features::PatchDeltaDeltaCoefficients(D, &FromVoid<double*>(featB.Read(frame_in))[D*2], &FromVoid<double*>(featB.Read(frame_out1))[D*2],
-                                          &FromVoid<double*>(featB.Read(frame_out2))[D*2], &FromVoid<double*>(featB.Read(frame_out3))[D*2]);
+    Features::PatchDeltaDeltaCoefficients(D, &static_cast<double*>(featB.Read(frame_in))[D*2], &static_cast<double*>(featB.Read(frame_out1))[D*2],
+                                          &static_cast<double*>(featB.Read(frame_out2))[D*2], &static_cast<double*>(featB.Read(frame_out3))[D*2]);
   }
 
   int DecodeFrame(int frame, bool init=false) {
     if (init) time_index = 0;
     int t = time_index++;
-    obptr.v = FromVoid<double*>(featB.Read(frame)); 
-    btptr.v = FromVoid<HMM::Token*>(backtraceB.Read(frame));
+    obptr.v = static_cast<double*>(featB.Read(frame)); 
+    btptr.v = static_cast<HMM::Token*>(backtraceB.Read(frame));
     return HMM::Forward(&beam, &transit, &emit, &beam, &beam, 0, init, t);
   }
 
   HTTPServer::Response Request(Connection *, int method, const char *url, const char *args, const char *headers, const char *postdata, int postlen) {
 
     if (postlen < sizeof(AcousticEventHeader)) return HTTPServer::Response::_400;
-    const AcousticEventHeader *AEH = FromVoid<const AcousticEventHeader*>(postdata);
+    const AcousticEventHeader *AEH = reinterpret_cast<const AcousticEventHeader*>(postdata);
 
     if (postlen != sizeof(AcousticEventHeader) + AEH->m * AEH->n * sizeof(float))
       if (AEH->m > featB.ring.size || AEH->n != feats_dim) return HTTPServer::Response::_400;        
-    const float *featureData = FromVoid<const float*>(AEH+1);
+    const float *featureData = reinterpret_cast<const float*>(AEH+1);
 
     StringPiece flushArg;
     if (args) HTTP::GrepURLArgs(args, 0, 1, "flush", &flushArg);
@@ -136,9 +136,9 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
     alloc.Reset();
 
     for (int i=0; i<M; i++) {
-      double *feat = FromVoid<double*>(featB.Write(RingBuf::Stamp, microseconds(timestamp+i)));
-      double *in = FromVoid<double*>(inB.Write());
-      double *var = FromVoid<double*>(varB.Write());
+      double *feat = static_cast<double*>(featB.Write(RingBuf::Stamp, microseconds(timestamp+i)));
+      double *in = static_cast<double*>(inB.Write());
+      double *var = static_cast<double*>(varB.Write());
       int rollingMeanSamples = FeatureRollingMeanSamples();
 
       for (int j=0; j<N; j++) {
@@ -158,25 +158,25 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
       }
 
       backtraceB.Write();
-      *FromVoid<HMM::Token*>(viterbiB.Write()) = HMM::Token();
+      *static_cast<HMM::Token*>(viterbiB.Write()) = HMM::Token();
       feats_available++;
     }
 
     if (Features::mean_normalization || Features::variance_normalization) {
-      double *rmean = FromVoid<double*>(alloc.Malloc(feats_dim*sizeof(double)));
-      double *rvariance = FromVoid<double*>(alloc.Malloc(feats_dim*sizeof(double)));
+      double *rmean = static_cast<double*>(alloc.Malloc(feats_dim*sizeof(double)));
+      double *rvariance = static_cast<double*>(alloc.Malloc(feats_dim*sizeof(double)));
       FeatureRollingMeanAndVariance(rmean, rvariance);
 
       for (/**/; feats_available > feats_normalized; feats_normalized++) {
-        double *feat = FromVoid<double*>(featB.Read(-feats_available+feats_normalized));
+        double *feat = static_cast<double*>(featB.Read(-feats_available+feats_normalized));
         Features::MeanAndVarianceNormalization(feats_dim, feat, rmean, rvariance);
       }
     }
     else feats_normalized = feats_available;
 
-    AcousticEventHeader *response = FromVoid<AcousticEventHeader*>(alloc.Malloc(sizeof(AcousticEventHeader) + sizeof(float)*MaxResponseWords + MaxResponseTranscript));
+    AcousticEventHeader *response = static_cast<AcousticEventHeader*>(alloc.Malloc(sizeof(AcousticEventHeader) + sizeof(float)*MaxResponseWords + MaxResponseTranscript));
     response->m = 0; response->n = 2;
-    float *responseV = FromVoid<float*>(response+1);
+    float *responseV = reinterpret_cast<float*>(response+1);
     int prior_feats_processed = feats_processed, decode_end, endseq=0, endindex;
 
     for (;;) {
@@ -271,7 +271,7 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
     if (transcript.size() > MaxResponseTranscript) { ERRORf("overflow %d > %d", transcript.size(), MaxResponseTranscript); return HTTPServer::Response::_400; }
     memcpy(&responseV[response->m*response->n], transcript.c_str(), transcript.size()+1);
 
-    return HTTPServer::Response("application/octet-stream", StringPiece(FromVoid<char*>(response), sizeof(AcousticEventHeader) + response->m * response->n * sizeof(float) + transcript.size()+1));
+    return HTTPServer::Response("application/octet-stream", StringPiece(reinterpret_cast<char*>(response), sizeof(AcousticEventHeader) + response->m * response->n * sizeof(float) + transcript.size()+1));
   }
 
   static void AddResponseWord(AcousticEventHeader *response, float *responseV, Recognizer::WordIter &iter, string &ts, string &ats, const char *annotation=0) {
@@ -315,12 +315,12 @@ int FusionServer(int argc, const char **argv) {
     if (FLAGS_speech_recognition_debug) {
       INFO(FLAGS_decode, ": features(", feat->M, ")");
       for (int i=0; i<feat->M; i++)
-        Vector::Print(FromVoid<const double*>(decoder->featB.Ind(i)), Features::Dimension()*3);
+        Vector::Print(static_cast<const double*>(decoder->featB.Ind(i)), Features::Dimension()*3);
     }
 
-    const AcousticEventHeader *AEH = FromVoid<const AcousticEventHeader*>(response.content);
-    const float *timestamp = FromVoid<const float*>(AEH+1);
-    const char *transcript = FromVoid<const char*>(timestamp + AEH->m * AEH->n);
+    const AcousticEventHeader *AEH = reinterpret_cast<const AcousticEventHeader*>(response.content);
+    const float *timestamp = reinterpret_cast<const float*>(AEH+1);
+    const char *transcript = reinterpret_cast<const char*>(timestamp + AEH->m * AEH->n);
     INFO(FLAGS_decode, ": viterbi(", AEH->m, ") ", AEH->m ? transcript : "");
     return 0;
   }

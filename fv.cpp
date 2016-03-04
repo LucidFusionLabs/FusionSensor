@@ -16,24 +16,25 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "core/app/app.h"
+#include "core/app/network.h"
+#include "core/web/dom.h"
+#include "core/web/css.h"
+#include "core/app/flow.h"
+#include "core/app/gui.h"
+#include "core/app/camera.h"
+#include "core/app/audio.h"
+#include "core/ml/hmm.h"
+#include "core/speech/speech.h"   
+#include "core/speech/voice.h"
+#include "fs.h"
+#include "core/speech/aed.h"
+
 #ifdef LFL_OPENCV
 #include "opencv/cxcore.h"
 #include "opencv/cv.h"
+#include "core/app/bindings/opencv.h"
 #endif
-
-#include "lfapp/lfapp.h"
-#include "lfapp/network.h"
-#include "lfapp/dom.h"
-#include "lfapp/css.h"
-#include "lfapp/flow.h"
-#include "lfapp/gui.h"
-#include "lfapp/camera.h"
-#include "lfapp/audio.h"
-#include "ml/hmm.h"
-#include "speech/speech.h"   
-#include "speech/voice.h"
-#include "fs.h"
-#include "speech/aed.h"
 
 namespace LFL {
 DEFINE_float(clip, -30, "Clip audio under N decibels");
@@ -76,7 +77,7 @@ struct LiveSpectogram {
 
   void XForm(const string &n) {
     if (n == "mel") {
-      transform = unique_ptr<Matrix>(FFT2Mel(FLAGS_feat_melbands, FLAGS_feat_minfreq, FLAGS_feat_maxfreq, FLAGS_feat_window, FLAGS_sample_rate)->Transpose(mDelA));
+      transform = unique_ptr<Matrix>(Features::FFT2Mel(FLAGS_feat_melbands, FLAGS_feat_minfreq, FLAGS_feat_maxfreq, FLAGS_feat_window, FLAGS_sample_rate)->Transpose(mDelA));
       Resize(FLAGS_feat_melbands);
     } else {
       transform.reset();
@@ -91,11 +92,11 @@ struct LiveSpectogram {
       RingBuf::Handle L(app->audio->IL.get(), app->audio->RL.next-Behind(), FLAGS_feat_window);
 
       Matrix *Frame, *FFT;
-      Frame = FFT = Spectogram(&L, transform ? 0 : handle.Write(), FLAGS_feat_window, FLAGS_feat_hop, FLAGS_feat_window, 0, PowerDomain::abs);
+      Frame = FFT = Spectogram(&L, transform ? 0 : handle.Write(), FLAGS_feat_window, FLAGS_feat_hop, FLAGS_feat_window, vector<double>(), PowerDomain::abs);
       if (transform) Frame = Matrix::Mult(FFT, transform.get(), handle.Write());
       if (transform) delete FFT;
 
-      int ind = texture_slide * live->tex.width * Pixel::size(live->tex.pf);
+      int ind = texture_slide * live->tex.width * Pixel::Size(live->tex.pf);
       glSpectogram(Frame, live->tex.buf+ind, live->tex.pf, 1, feature_width, feature_width,
                    vmax, FLAGS_clip, 0, PowerDomain::abs);
 
@@ -184,8 +185,8 @@ struct LiveCamera {
 
     if (FLAGS_lfapp_camera && cam == camera) {
       /* update camera buffer */
-      cam->tex.UpdateBuffer(app->camera->image, point(FLAGS_camera_image_width, FLAGS_camera_image_height),
-                            app->camera->image_format, app->camera->image_linesize, Texture::Flag::Resample);
+      cam->tex.UpdateBuffer(app->camera->state.image, point(FLAGS_camera_image_width, FLAGS_camera_image_height),
+                            app->camera->state.image_format, app->camera->state.image_linesize, Texture::Flag::Resample);
 
       /* flush camera buffer */
       cam->tex.Bind();
@@ -197,8 +198,8 @@ struct LiveCamera {
 
     /* copy greyscale image */
     IplImage camI, camfxI;
-    camfx->tex.ToIplImage(&camfxI);
-    cam->tex.ToIplImage(&camI);
+    TextureToIplImage(camfx->tex, &camfxI);
+    TextureToIplImage(cam->tex, &camI);
     cvCvtColor(&camI, &camfxI, CV_RGB2GRAY);
 
     if (0) {
@@ -228,9 +229,7 @@ struct MyWindowState {
   PhoneticSegmentationGUI *segments=0;
   unique_ptr<LiveCamera> liveCam;
   unique_ptr<LiveSpectogram> liveSG;
-#ifdef LFL_FFMPEG
   HTTPServer::StreamResource *stream = 0;
-#endif
 };
 
 struct AudioGUI : public GUI {
@@ -248,7 +247,9 @@ struct AudioGUI : public GUI {
     text_font(FontDesc(FLAGS_default_font, "", 8,  Color::grey80)),
     play_button  (this, Singleton<DrawableNop>::Get(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) screen->shell->play(vector<string>(1,"snap")); })),
     decode_button(this, Singleton<DrawableNop>::Get(), "decode",  MouseController::CB([=](){ decode = true; })),
-    record_button(this, Singleton<DrawableNop>::Get(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {}
+    record_button(this, Singleton<DrawableNop>::Get(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {
+    play_button.v_align = decode_button.v_align = record_button.v_align = VAlign::Bottom;
+  }
 
   void HandleNetDecodeResponse(FeatureSink::DecodedWords &decode, int responselen) {
     transcript.clear();
@@ -264,6 +265,7 @@ struct AudioGUI : public GUI {
     CHECK(norm_font.Load());
     CHECK(text_font.Load());
     Flow flow(&box, 0, &child_box);
+    flow.layout.append_only = true;
 
     play_button  .LayoutBox(&flow, norm_font, screen->Box(0,  -.85, .5, .15, .16, .0001));
     decode_button.LayoutBox(&flow, norm_font, screen->Box(.5, -.85, .5, .15, .16, .0001));
@@ -297,7 +299,7 @@ struct AudioGUI : public GUI {
 
     /* progress bar */
     if (app->audio->Out.size() && !ws->myMonitor) {
-      float percent=1-float(app->audio->Out.size()+feat_progressbar_c*FLAGS_sample_rate*FLAGS_chans_out)/app->audio->outlast;
+      float percent=1-float(app->audio->Out.size()+Audio::VisualDelay()*FLAGS_sample_rate*FLAGS_chans_out)/app->audio->outlast;
       ws->liveSG->ProgressBar(si, percent);
     }
 
@@ -339,7 +341,8 @@ struct AudioGUI : public GUI {
     SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
     if (!a || !sa) return;
     bool recalibrate=1;
-    glSpectogram(sa, &a->tex, ws->liveSG->transform.get(), recalibrate?&ws->liveSG->vmax:0, FLAGS_clip);
+    RingBuf::Handle H(sa->wav.get());
+    glSpectogram(&H, &a->tex, ws->liveSG->transform.get(), recalibrate?&ws->liveSG->vmax:0, FLAGS_clip);
   }
 
   void SnapCmd(const vector<string> &args) {
@@ -435,7 +438,7 @@ struct VideoGUI : public GUI {
 
   void Draw() {
     if (ws->liveCam) {
-      if (app->camera->have_sample || app->asset_loader->movie_playing) ws->liveCam->Update();
+      if (app->camera->state.have_sample || app->asset_loader->movie_playing) ws->liveCam->Update();
 
       float yp=0.5, ys=0.5, xbdr=0.05, ybdr=0.07;
       Box st = screen->Box(0, .5, 1, ys, xbdr+0.04, ybdr+0.035, xbdr+0.04, .01);
@@ -567,9 +570,7 @@ struct FVGUI : public GUI {
     int mic_samples = app->audio->mic_samples;
     if (ws.AED) ws.AED->Update(mic_samples);
     if (ws.liveSG) ws.liveSG->Update(mic_samples);
-#ifdef LFL_FFMPEG
-    if (ws.stream) ws.stream->Update(mic_samples, app->camera->have_sample);
-#endif
+    if (ws.stream) ws.stream->Update(mic_samples, app->camera->state.have_sample);
 
 #if defined(LFL_IPHONE) || defined(LFL_ANDROID)
     int orientation = NativeWindowOrientation();
@@ -596,14 +597,14 @@ struct FVGUI : public GUI {
 };
 
 void MyWindowInitCB(Window *W) {
-	W->width = 640;
-	W->height = 480;
+  W->width = 640;
+  W->height = 480;
   W->caption = "fusion viewer";
 }
 
 void MyWindowStartCB(Window *W) {
   FVGUI *fv_gui = W->AddGUI(make_unique<FVGUI>());
-  if (FLAGS_lfapp_console) W->InitConsole(Callback());
+  if (FLAGS_console) W->InitConsole(Callback());
   fv_gui->ws.liveSG = make_unique<LiveSpectogram>(my_app->asset("live"), my_app->asset("snap"));
   fv_gui->ws.liveSG->XForm("mel");
   fv_gui->audio_gui = W->AddGUI(make_unique<AudioGUI>(&fv_gui->ws));
@@ -612,12 +613,12 @@ void MyWindowStartCB(Window *W) {
   fv_gui->room_gui = make_unique<RoomGUI>(&fv_gui->ws);
   fv_gui->SetMyTab(1);
   fv_gui->ReloadAED();
-	W->frame_cb = bind(&FVGUI::Frame, fv_gui, _1, _2, _3);
+  W->frame_cb = bind(&FVGUI::Frame, fv_gui, _1, _2, _3);
 
   BindMap *binds = W->AddInputController(make_unique<BindMap>());
-	// binds->Bind(key,         callback,         arg));
-	binds->Add(Key::Backquote, Bind::CB(bind(&Shell::console,  screen->shell.get(), vector<string>())));
-	binds->Add(Key::Quote,     Bind::CB(bind(&Shell::console,  screen->shell.get(), vector<string>())));
+  // binds->Bind(key,         callback,         arg));
+  binds->Add(Key::Backquote, Bind::CB(bind(&Shell::console,  screen->shell.get(), vector<string>())));
+  binds->Add(Key::Quote,     Bind::CB(bind(&Shell::console,  screen->shell.get(), vector<string>())));
   binds->Add(Key::Escape,    Bind::CB(bind(&Shell::quit,     screen->shell.get(), vector<string>())));
   binds->Add(Key::Return,    Bind::CB(bind(&Shell::grabmode, screen->shell.get(), vector<string>())));
   binds->Add(Key::LeftShift, Bind::TimeCB(bind(&Entity::RollLeft,   W->cam.get(), _1)));
@@ -628,18 +629,18 @@ void MyWindowStartCB(Window *W) {
   binds->Add('d',            Bind::TimeCB(bind(&Entity::MoveRight,  W->cam.get(), _1)));
   binds->Add('q',            Bind::TimeCB(bind(&Entity::MoveDown,   W->cam.get(), _1)));
   binds->Add('e',            Bind::TimeCB(bind(&Entity::MoveUp,     W->cam.get(), _1)));
-  
+
   W->shell = make_unique<Shell>(&my_app->asset, &my_app->soundasset, nullptr);
-	W->shell->Add("speech_client", bind(&AudioGUI::SpeechClientCmd,        fv_gui->audio_gui, _1));
-	W->shell->Add("draw",          bind(&AudioGUI::DrawCmd,                fv_gui->audio_gui, _1));
-	W->shell->Add("snap",          bind(&AudioGUI::SnapCmd,                fv_gui->audio_gui, _1));
-	W->shell->Add("decode",        bind(&AudioGUI::DecodeCmd,              fv_gui->audio_gui, _1));
-	W->shell->Add("netdecode",     bind(&AudioGUI::NetDecodeCmd,           fv_gui->audio_gui, _1));
-	W->shell->Add("synth",         bind(&AudioGUI::SynthCmd,               fv_gui->audio_gui, _1));
-	W->shell->Add("resynth",       bind(&AudioGUI::ResynthCmd,             fv_gui->audio_gui, _1));
-	W->shell->Add("sgtf",          bind(&AudioGUI::SpectogramTransformCmd, fv_gui->audio_gui, _1));
-	W->shell->Add("sgxf",          bind(&AudioGUI::SpectogramTransformCmd, fv_gui->audio_gui, _1));
-	W->shell->Add("server",        bind(&AudioGUI::ServerCmd,              fv_gui->audio_gui, _1));
+  W->shell->Add("speech_client", bind(&AudioGUI::SpeechClientCmd,        fv_gui->audio_gui, _1));
+  W->shell->Add("draw",          bind(&AudioGUI::DrawCmd,                fv_gui->audio_gui, _1));
+  W->shell->Add("snap",          bind(&AudioGUI::SnapCmd,                fv_gui->audio_gui, _1));
+  W->shell->Add("decode",        bind(&AudioGUI::DecodeCmd,              fv_gui->audio_gui, _1));
+  W->shell->Add("netdecode",     bind(&AudioGUI::NetDecodeCmd,           fv_gui->audio_gui, _1));
+  W->shell->Add("synth",         bind(&AudioGUI::SynthCmd,               fv_gui->audio_gui, _1));
+  W->shell->Add("resynth",       bind(&AudioGUI::ResynthCmd,             fv_gui->audio_gui, _1));
+  W->shell->Add("sgtf",          bind(&AudioGUI::SpectogramTransformCmd, fv_gui->audio_gui, _1));
+  W->shell->Add("sgxf",          bind(&AudioGUI::SpectogramTransformCmd, fv_gui->audio_gui, _1));
+  W->shell->Add("server",        bind(&AudioGUI::ServerCmd,              fv_gui->audio_gui, _1));
   W->shell->Add("startcamera",   bind(&VideoGUI::StartCameraCmd,         fv_gui->video_gui, _1));
 
 #if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)
@@ -652,10 +653,8 @@ void MyWindowStartCB(Window *W) {
   VoiceModel *voice = (fv_gui->audio_gui->voice = make_unique<VoiceModel>()).get();
   if (voice->Read(Asset::FileName("").c_str()) < 0) return ERROR(-1, "voice read ", Asset::FileName(""));
 
-#ifdef LFL_FFMPEG
   fv_gui->ws.stream = new HTTPServer::StreamResource("flv", 32000, 300000);
   my_app->httpd->AddURL("/stream.flv", fv_gui->ws.stream);
-#endif
 #endif
 }
 
@@ -664,10 +663,10 @@ using namespace LFL;
 
 extern "C" void LFAppCreateCB() {
   FLAGS_target_fps = 30;
-  FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = FLAGS_lfapp_console = true;
+  FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = FLAGS_console = true;
   FLAGS_font_engine = "atlas";
   FLAGS_default_font = "Nobile.ttf";
-  FLAGS_default_font_flag = FLAGS_lfapp_console_font_flag = 0;
+  FLAGS_default_font_flag = FLAGS_console_font_flag = 0;
 #ifdef LFL_DEBUG
   app->logfilename = StrCat(LFAppDownloadDir(), "fv.txt");
 #endif
@@ -727,6 +726,6 @@ extern "C" int main(int argc, const char *argv[]) {
                  "</html>\r\n"));
 #endif
 
-  app->window_start_cb(screen);
+  app->StartNewWindow(screen);
   return app->Main();
 }

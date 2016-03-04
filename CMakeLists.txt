@@ -1,39 +1,23 @@
 # $Id: CMakeLists.txt 1320 2014-10-26 08:12:52Z justin $
 
-set(LFL_PNG 1)
-set(LFL_LFLINPUT 1)
-set(LFL_LFLVIDEO 1)
-set(LFL_GLES2 1)
-
-if(LFL_ANDROID)
-elseif(LFL_IPHONE)
-else(LFL_ANDROID)
-  set(LFL_CAMERA 1)
-  set(LFL_OPENCV 1)
-  set(LFL_FFMPEG 1)
-  set(LFL_GLEW 1)
-  set(LFL_PORTAUDIO 1)
-  if(NOT WIN32)
-    set(LFL_GLOG 1)
-    set(LFL_LAME 1)
-    set(LFL_X264 1)
-  endif(NOT WIN32)
-endif(LFL_ANDROID)
-
 lfl_project(fv)
-add_subdirectory(../core/lfapp ${CMAKE_CURRENT_BINARY_DIR}/lfapp_obj)
-add_definitions(${LFAPP_DEF})
-include_directories(${LFAPP_INCLUDE})
 
-if(LFL_ANDROID)
-  add_library(fv fv.cpp)
-else(LFL_ANDROID)
-  add_executable(fv fv.cpp ${LFL_RECOGNITION_SOURCE})
-  target_link_libraries(fv ${LFAPP_LIB})
-  lfapp_post_build_start(fv fv FusionViewer)
-endif(LFL_ANDROID)
+lfl_add_target(fv fv.cpp ${LFL_RECOGNITION_SOURCE})
+target_compile_definitions(fv PUBLIC ${LFL_APP_DEF} -DLFL_OPENCV)
+target_include_directories(fv PUBLIC ${LFL_APP_INCLUDE} ${OPENCV_INCLUDE})
+target_link_libraries(fv ${LFL_APP_LIB} ${LFL_APP_PLATFORM} ${LFL_APP_GRAPHICS}
+                      ${LFL_APP_AUDIO} ${LFL_APP_CAMERA} app_opencv_matrix app_ffmpeg_fft
+                      app_ffmpeg_resampler app_ffmpeg_loader app_iconv_convert
+                      app_libpng_png app_null_jpeg app_null_gif app_null_css app_null_ttf
+                      app_null_ssl app_ffmpeg_stream)
+lfl_post_build_start(fv fv FusionViewer)
 
 add_executable(fs fs.cpp ${LFL_RECOGNITION_SOURCE})
-target_link_libraries(fs ${LFAPP_LIB})
-lfapp_post_build_start(fs fs FusionServer)
+target_include_directories(fs PUBLIC ${LFL_APP_INCLUDE})
+target_link_libraries(fs ${LFL_APP_LIB} app_null_platform app_null_graphics
+                      app_null_audio app_null_camera app_opencv_matrix app_ffmpeg_fft
+                      app_simple_resampler app_simple_loader app_iconv_convert
+                      app_null_png app_null_jpeg app_null_gif app_null_css app_null_ttf
+                      app_null_ssl)
+lfl_post_build_start(fs fs FusionServer)
 

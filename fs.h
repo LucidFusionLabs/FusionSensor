@@ -37,7 +37,7 @@ struct SpeechDecodeClient : public FeatureSink {
 
   int Connect(const char *url) {
     Reset();
-    conn = app->net->http_client->PersistentConnection(url, &host, &path, bind(&SpeechDecodeClient::HTTPClientResponseCB, this, _1, _2, _3, _4, _5));
+    conn = HTTPClient::PersistentConnection(url, &host, &path, bind(&SpeechDecodeClient::HTTPClientResponseCB, this, _1, _2, _3, _4, _5));
     return 0;
   }
 
@@ -55,7 +55,7 @@ struct SpeechDecodeClient : public FeatureSink {
 
     alloc.Reset();
     int len = sizeof(AcousticEventHeader) + sizeof(float) * feat->M * feat->N;
-    char *buf = FromVoid<char*>(alloc.Malloc(len));
+    char *buf = static_cast<char*>(alloc.Malloc(len));
 
     AcousticEventHeader *AEH = reinterpret_cast<AcousticEventHeader*>(buf);
     AEH->timestamp = timestamp;
@@ -85,7 +85,7 @@ struct SpeechDecodeClient : public FeatureSink {
 
     alloc.Reset();
     int len = sizeof(AcousticEventHeader);
-    char *buf = FromVoid<char*>(alloc.Malloc(len));
+    char *buf = static_cast<char*>(alloc.Malloc(len));
 
     AcousticEventHeader *AEH = reinterpret_cast<AcousticEventHeader*>(buf);
     memset(AEH, 0, sizeof(AcousticEventHeader));
