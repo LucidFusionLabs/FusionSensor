@@ -47,14 +47,14 @@ struct MyAppState {
   AssetMap asset;
   SoundAssetMap soundasset;
   HTTPServer *httpd=0;
-} *my_app = new MyAppState();
+} *my_app;
 
 struct LiveSpectogram {
   int feature_rate, feature_width;
   int samples_processed=0, samples_available=0, texture_slide=0;
   float vmax=35, scroll=0;
-  RingBuf buf;
-  RingBuf::RowMatHandle handle;
+  RingSampler buf;
+  RingSampler::RowMatHandle handle;
   unique_ptr<Matrix> transform;
   Asset *live, *snap;
 
@@ -89,7 +89,7 @@ struct LiveSpectogram {
     samples_available += samples;
     while(samples_available >= samples_processed + FLAGS_feat_window) {
       const double *last = handle.Read(-1)->row(0);
-      RingBuf::Handle L(app->audio->IL.get(), app->audio->RL.next-Behind(), FLAGS_feat_window);
+      RingSampler::Handle L(app->audio->IL.get(), app->audio->RL.next-Behind(), FLAGS_feat_window);
 
       Matrix *Frame, *FFT;
       Frame = FFT = Spectogram(&L, transform ? 0 : handle.Write(), FLAGS_feat_window, FLAGS_feat_hop, FLAGS_feat_window, vector<double>(), PowerDomain::abs);
@@ -122,25 +122,25 @@ struct LiveSpectogram {
         static int decimate = 10;
         int delay = Behind(), samples = feature_rate*FLAGS_feat_hop*FLAGS_sample_secs;
         if (onoff) {
-          RingBuf::Handle B(app->audio->IL.get(), app->audio->RL.next-delay, samples);
+          RingSampler::Handle B(app->audio->IL.get(), app->audio->RL.next-delay, samples);
           Waveform::Decimated(win.Dimension(), &Color::white, &B, decimate).Draw(win); 
         }
         else {
           SoundAsset *snap_sound = my_app->soundasset("snap");
-          RingBuf::Handle B(snap_sound->wav.get(), snap_sound->wav->ring.back, samples);
+          RingSampler::Handle B(snap_sound->wav.get(), snap_sound->wav->ring.back, samples);
           Waveform::Decimated(win.Dimension(), &Color::white, &B, decimate).Draw(win); 
         }
       }
       else if (ploti == "pe" && onoff && AED) {
-        RingBuf::Handle B(&AED->pe, AED->pe.ring.back);
+        RingSampler::Handle B(&AED->pe, AED->pe.ring.back);
         Waveform(win.Dimension(), &Color::white, &B).Draw(win);
       }
       else if (ploti == "zcr" && onoff && AED) {
-        RingBuf::Handle B(&AED->zcr, AED->zcr.ring.back);
+        RingSampler::Handle B(&AED->zcr, AED->zcr.ring.back);
         Waveform(win.Dimension(), &Color::white, &B).Draw(win);
       }
       else if (ploti == "szcr" && onoff && AED) {
-        RingBuf::DelayHandle B(&AED->szcr, AED->szcr.ring.back, AcousticEventDetector::szcr_shift);
+        RingSampler::DelayHandle B(&AED->szcr, AED->szcr.ring.back, AcousticEventDetector::szcr_shift);
         Waveform(win.Dimension(), &Color::white, &B).Draw(win);
       }
     }
@@ -243,12 +243,13 @@ struct AudioGUI : public GUI {
   string transcript, speech_client_last=FLAGS_speech_client;
 
   AudioGUI(MyWindowState *S) : ws(S),
-    norm_font(FontDesc(FLAGS_default_font, "", 12, Color::grey70)),
-    text_font(FontDesc(FLAGS_default_font, "", 8,  Color::grey80)),
+    norm_font(FontDesc(FLAGS_default_font, "", 12, Color::grey70, Color::black)),
+    text_font(FontDesc(FLAGS_default_font, "", 8,  Color::grey80, Color::black)),
     play_button  (this, Singleton<DrawableNop>::Get(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) screen->shell->play(vector<string>(1,"snap")); })),
     decode_button(this, Singleton<DrawableNop>::Get(), "decode",  MouseController::CB([=](){ decode = true; })),
     record_button(this, Singleton<DrawableNop>::Get(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {
-    play_button.v_align = decode_button.v_align = record_button.v_align = VAlign::Bottom;
+      play_button.v_align = decode_button.v_align = record_button.v_align = VAlign::Bottom;
+      play_button.v_offset = decode_button.v_offset = -norm_font->Height();
   }
 
   void HandleNetDecodeResponse(FeatureSink::DecodedWords &decode, int responselen) {
@@ -261,15 +262,15 @@ struct AudioGUI : public GUI {
   }
 
   void Layout() {
+    Reset();
     box = screen->Box();
     CHECK(norm_font.Load());
     CHECK(text_font.Load());
     Flow flow(&box, 0, &child_box);
-    flow.layout.append_only = true;
-
-    play_button  .LayoutBox(&flow, norm_font, screen->Box(0,  -.85, .5, .15, .16, .0001));
-    decode_button.LayoutBox(&flow, norm_font, screen->Box(.5, -.85, .5, .15, .16, .0001));
-    record_button.LayoutBox(&flow, norm_font, screen->Box(0,  -.65,  1, .2,  .38, .0001));
+    flow.layout.append_only = flow.cur_attr.blend = true;
+    play_button  .LayoutBox(&flow, norm_font, screen->Box(0,  -.85, .5, .15, .16, .0001).center(my_app->asset("but1")->tex.Dimension()));
+    decode_button.LayoutBox(&flow, norm_font, screen->Box(.5, -.85, .5, .15, .16, .0001).center(my_app->asset("but1")->tex.Dimension()));
+    record_button.LayoutBox(&flow, norm_font, screen->Box(0,  -.65,  1, .2,  .38, .0001).center(my_app->asset("onoff1")->tex.Dimension()));
 
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ monitor_hover = !monitor_hover; }));
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ if ( ws->myMonitor) MonitorCmd(vector<string>(1,"snap")); }));
@@ -316,7 +317,7 @@ struct AudioGUI : public GUI {
 
     /* f0 */
     if (0) {
-      RingBuf::Handle f0in(app->audio->IL.get(), app->audio->RL.next-FLAGS_feat_window, FLAGS_feat_window);
+      RingSampler::Handle f0in(app->audio->IL.get(), app->audio->RL.next-FLAGS_feat_window, FLAGS_feat_window);
       text_font->Draw(StringPrintf("hz %.0f", FundamentalFrequency(&f0in, FLAGS_feat_window, 0)), point(screen->width*.85, screen->height*.05));
     }
 
@@ -341,7 +342,7 @@ struct AudioGUI : public GUI {
     SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
     if (!a || !sa) return;
     bool recalibrate=1;
-    RingBuf::Handle H(sa->wav.get());
+    RingSampler::Handle H(sa->wav.get());
     glSpectogram(&H, &a->tex, ws->liveSG->transform.get(), recalibrate?&ws->liveSG->vmax:0, FLAGS_clip);
   }
 
@@ -410,10 +411,10 @@ struct AudioGUI : public GUI {
 
   void SynthCmd(const vector<string> &args) {
     if (!voice) return;
-    unique_ptr<RingBuf> synth(voice->Synth(Join(args, " ").c_str()));
+    unique_ptr<RingSampler> synth(voice->Synth(Join(args, " ").c_str()));
     if (!synth) return ERROR("synth ret 0");
     INFO("synth ", synth->ring.size);
-    RingBuf::Handle B(synth.get());
+    RingSampler::Handle B(synth.get());
     app->audio->QueueMixBuf(&B);
   }
 
@@ -446,7 +447,7 @@ struct VideoGUI : public GUI {
       ws->liveCam->Draw(st, sb);
     }
 
-    static Font *text = app->fonts->Get(FLAGS_default_font, "", 9, Color::grey80);
+    static Font *text = app->fonts->Get(FLAGS_default_font, "", 9, Color::grey80, Color::black);
     text->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(screen->width*.05, screen->height*.05));
    }
 };
@@ -537,10 +538,14 @@ struct FVGUI : public GUI {
   FullscreenGUI *fullscreen_gui=0;
   MyWindowState ws;
 
-  FVGUI() : font(FontDesc(FLAGS_default_font, "", 12, Color::grey70)),
+  FVGUI() : font(FontDesc(FLAGS_default_font, "", 12, Color::grey70, Color::black)),
   tab1(this, 0, "audio gui",  MouseController::CB(bind(&FVGUI::SetMyTab, this, 1))),
   tab2(this, 0, "video gui",  MouseController::CB(bind(&FVGUI::SetMyTab, this, 2))), 
-  tab3(this, 0, "room model", MouseController::CB(bind(&FVGUI::SetMyTab, this, 3))) { Activate(); }
+  tab3(this, 0, "room model", MouseController::CB(bind(&FVGUI::SetMyTab, this, 3))) {
+    Activate();
+    tab1.outline_topleft     = tab2.outline_topleft     = tab3.outline_topleft     = &Color::grey80;
+    tab1.outline_bottomright = tab2.outline_bottomright = tab3.outline_bottomright = &Color::grey40;
+  }
 
   void SetMyTab(int a) { 
     ws.myTab = a; 
@@ -555,12 +560,14 @@ struct FVGUI : public GUI {
   }
 
   void Layout() {
+    Reset();
     box = screen->Box();
     CHECK(font.Load());
     Flow flow(&box, 0, &child_box);
-    tab1.Layout(&flow, font, point(screen->width/3, screen->height*.05));
-    tab2.Layout(&flow, font, point(screen->width/3, screen->height*.05));
-    tab3.Layout(&flow, font, point(screen->width/3, screen->height*.05));
+    int tw=screen->width/3, th=screen->height*.05, lw=tab1.outline_w;
+    flow.p.x+=1*lw-1; tab1.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
+    flow.p.x+=2*lw-2; tab2.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
+    flow.p.x+=2*lw-2; tab3.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
   }
 
   int Frame(LFL::Window *W, unsigned clicks, int flag) {
@@ -661,23 +668,24 @@ void MyWindowStartCB(Window *W) {
 }; // namespace LFL
 using namespace LFL;
 
-extern "C" void LFAppCreateCB() {
+extern "C" void MyAppCreate() {
   FLAGS_target_fps = 30;
   FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = FLAGS_console = true;
-  FLAGS_font_engine = "atlas";
-  FLAGS_default_font = "Nobile.ttf";
+  FLAGS_console_font = "Nobile.ttf";
   FLAGS_default_font_flag = FLAGS_console_font_flag = 0;
-#ifdef LFL_DEBUG
-  app->logfilename = StrCat(LFAppDownloadDir(), "fv.txt");
-#endif
+  app = new Application();
+  screen = new Window();
+  my_app = new MyAppState();
   app->window_start_cb = MyWindowStartCB;
   app->window_init_cb = MyWindowInitCB;
   app->window_init_cb(screen);
   app->exit_cb = []{ delete my_app; };
 }
 
-extern "C" int main(int argc, const char *argv[]) {
-  if (app->Create(argc, argv, __FILE__, LFAppCreateCB)) return -1;
+extern "C" int MyAppMain(int argc, const char* const* argv) {
+  if (app->Create(argc, argv, __FILE__)) return -1;
+  if (FLAGS_font_engine == "atlas") FLAGS_default_font = "Nobile.ttf";
+
   if (app->Init()) return -1;
   screen->gd->default_draw_mode = DrawMode::_3D;
 
@@ -706,7 +714,7 @@ extern "C" int main(int argc, const char *argv[]) {
 
   // soundasset.Add(name, filename, ringbuf, channels, sample_rate, seconds);
   my_app->soundasset.Add("draw", "Draw.wav", nullptr, 0, 0, 0);
-  my_app->soundasset.Add("snap", "", new RingBuf(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs);
+  my_app->soundasset.Add("snap", "", new RingSampler(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs);
   my_app->soundasset.Load();
 
 #if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)

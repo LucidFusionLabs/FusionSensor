@@ -54,7 +54,7 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
   FixedAllocator<65536*2> alloc;
   FixedAllocator<32*1024*1024> once;
   int feats_dim, feats_available, feats_normalized, feats_processed, feats_seqL, time_index;
-  RingBuf inB, featB, varB, backtraceB, viterbiB;
+  RingSampler inB, featB, varB, backtraceB, viterbiB;
   double *rollingMean, *rollingVariance;
 
   HMM::ObservationPtr obptr;
@@ -136,7 +136,7 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
     alloc.Reset();
 
     for (int i=0; i<M; i++) {
-      double *feat = static_cast<double*>(featB.Write(RingBuf::Stamp, microseconds(timestamp+i)));
+      double *feat = static_cast<double*>(featB.Write(RingSampler::Stamp, microseconds(timestamp+i)));
       double *in = static_cast<double*>(inB.Write());
       double *var = static_cast<double*>(varB.Write());
       int rollingMeanSamples = FeatureRollingMeanSamples();
@@ -238,8 +238,8 @@ struct SpeechDecodeSession : public HTTPServer::Resource {
     if (feats_processed > prior_feats_processed) {
       int seql = min(feats_seqL, featB.ring.size+decode_end+1);
       response->timestamp = featB.ReadTimestamp(decode_end-seql+1).count();
-      RingBuf::MatrixHandleT<HMM::Token> backtraceM(&backtraceB, backtraceB.ring.back+decode_end-seql+1, seql);
-      RingBuf::MatrixHandleT<HMM::Token> viterbiM  (&  viterbiB,   viterbiB.ring.back+decode_end-seql+1, seql);
+      RingSampler::MatrixHandleT<HMM::Token> backtraceM(&backtraceB, backtraceB.ring.back+decode_end-seql+1, seql);
+      RingSampler::MatrixHandleT<HMM::Token> viterbiM  (&  viterbiB,   viterbiB.ring.back+decode_end-seql+1, seql);
       int mergeind = HMM::Token::TracePath(&viterbiM, &backtraceM, endindex, seql, true);
 
       string ats;
@@ -296,7 +296,7 @@ struct SpeechDecodeServer : public HTTPServer::SessionResource {
   void Close(HTTPServer::Resource *resource) { delete resource; }
 };
 
-int FusionServer(int argc, const char **argv) {
+int FusionServer(int argc, const char* const* argv) {
   RecognitionModel recognize;
   if (recognize.Read("RecognitionNetwork", FLAGS_modeldir.c_str(), FLAGS_WantIter)) FATAL("open RecognitionNetwork ", FLAGS_modeldir);
   AcousticModel::ToCUDA(&recognize.acoustic_model);
@@ -307,7 +307,7 @@ int FusionServer(int argc, const char **argv) {
     sa.Load();
     if (!sa.wav) FATAL("load ", FLAGS_decode, " failed");
 
-    RingBuf::Handle B(sa.wav.get());
+    RingSampler::Handle B(sa.wav.get());
     Matrix *feat = Features::FromBuf(&B);
     SpeechDecodeSession *decoder = new SpeechDecodeSession(&recognize, FLAGS_sample_rate/FLAGS_feat_hop, 3);
     HTTPServer::Response response = decoder->Request<double>(feat->row(0), feat->M, feat->N, 0, true);
@@ -350,18 +350,20 @@ int FusionServer(int argc, const char **argv) {
 }; // namespace LFL
 using namespace LFL;
 
-extern "C" int main(int argc, const char **argv) {
-  app->logfilename = StrCat(LFAppDownloadDir(), "fs.txt");
-  static const char *service_name = "LFL Fusion Server";
-
+extern "C" void MyAppCreate() {
   FLAGS_lfapp_network = 1;
-#ifdef _WIN32
-  if (argc>1) open_console = 1;
-#endif
+  app = new Application();
+  screen = new Window();
+}
 
+extern "C" int MyAppMain(int argc, const char* const* argv) {
+#ifdef _WIN32
+  if (argc>1) FLAGS_open_console = 1;
+#endif
   if (app->Create(argc, argv, __FILE__)) return -1;
   if (app->Init()) return -1;
 
+  static const char *service_name = "LFL Fusion Server";
   bool exit=0;
 #ifdef _WIN32
   if (install) { service_install(service_name, argv[0]); exit=1; }
