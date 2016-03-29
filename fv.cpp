@@ -17,11 +17,8 @@
  */
 
 #include "core/app/app.h"
-#include "core/app/network.h"
-#include "core/web/dom.h"
-#include "core/web/css.h"
-#include "core/app/flow.h"
 #include "core/app/gui.h"
+#include "core/app/network.h"
 #include "core/app/camera.h"
 #include "core/app/audio.h"
 #include "core/ml/hmm.h"
