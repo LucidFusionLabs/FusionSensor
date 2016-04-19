@@ -670,6 +670,7 @@ extern "C" void MyAppCreate() {
   FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = FLAGS_console = true;
   FLAGS_console_font = "Nobile.ttf";
   FLAGS_default_font_flag = FLAGS_console_font_flag = 0;
+  FLAGS_chans_in = -1;
   app = new Application();
   screen = new Window();
   my_app = new MyAppState();
