@@ -170,7 +170,7 @@ struct LiveCamera {
   Asset *Input() {
     Asset *cam = 0;
     if (!cam) cam = app->asset_loader->movie_playing ? &app->asset_loader->movie_playing->video : 0;
-    if (!cam) cam = FLAGS_lfapp_camera ? camera : 0;
+    if (!cam) cam = FLAGS_enable_camera ? camera : 0;
     if (!cam) cam = my_app->asset("browser");
     return cam;
   }
@@ -180,7 +180,7 @@ struct LiveCamera {
     if (camfx->tex.width != cam->tex.width || camfx->tex.height != cam->tex.height)
       camfx->tex.Resize(cam->tex.width, cam->tex.height);
 
-    if (FLAGS_lfapp_camera && cam == camera) {
+    if (FLAGS_enable_camera && cam == camera) {
       /* update camera buffer */
       cam->tex.UpdateBuffer(app->camera->state.image, point(FLAGS_camera_image_width, FLAGS_camera_image_height),
                             app->camera->state.image_format, app->camera->state.image_linesize, Texture::Flag::Resample);
@@ -240,8 +240,8 @@ struct AudioGUI : public GUI {
   string transcript, speech_client_last=FLAGS_speech_client;
 
   AudioGUI(MyWindowState *S) : ws(S),
-    norm_font(FontDesc(FLAGS_default_font, "", 12, Color::grey70, Color::black)),
-    text_font(FontDesc(FLAGS_default_font, "", 8,  Color::grey80, Color::black)),
+    norm_font(FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
+    text_font(FontDesc(FLAGS_font, "", 8,  Color::grey80, Color::black)),
     play_button  (this, Singleton<DrawableNop>::Get(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) screen->shell->play(vector<string>(1,"snap")); })),
     decode_button(this, Singleton<DrawableNop>::Get(), "decode",  MouseController::CB([=](){ decode = true; })),
     record_button(this, Singleton<DrawableNop>::Get(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {
@@ -346,7 +346,7 @@ struct AudioGUI : public GUI {
   void SnapCmd(const vector<string> &args) {
     Asset *a = my_app->asset(IndexOrDefault(args, 0));
     SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
-    if (!FLAGS_lfapp_audio || !a || !sa) return;
+    if (!FLAGS_enable_audio || !a || !sa) return;
 
     FLAGS_speech_client = "manual";
     transcript.clear();
@@ -378,7 +378,7 @@ struct AudioGUI : public GUI {
     SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
     if (!sa) return INFO("decode <assset>");
     if (ws->AED && ws->AED->sink && ws->AED->sink->Connected()) return NetDecodeCmd(args);
-#if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)
+#ifndef LFL_MOBILE
     if (!decodeModel)
 #endif
     { return ERROR("decode error: not connected to server: ", -1); }
@@ -426,9 +426,9 @@ struct VideoGUI : public GUI {
   VideoGUI(MyWindowState *S) : ws(S) { StartCameraCmd(vector<string>()); }
 
   void StartCameraCmd(const vector<string>&) {
-    if (!FLAGS_lfapp_camera) {
-      FLAGS_lfapp_camera = true;
-      if (app->camera->Init()) { FLAGS_lfapp_camera = false; return INFO("camera init failed"); }
+    if (!FLAGS_enable_camera) {
+      FLAGS_enable_camera = true;
+      if (app->camera->Init()) { FLAGS_enable_camera = false; return INFO("camera init failed"); }
       INFO("camera started");
     }
     ws->liveCam = make_unique<LiveCamera>(my_app->asset("camera"), my_app->asset("camfx"));
@@ -444,7 +444,7 @@ struct VideoGUI : public GUI {
       ws->liveCam->Draw(st, sb);
     }
 
-    static Font *text = app->fonts->Get(FLAGS_default_font, "", 9, Color::grey80, Color::black);
+    static Font *text = app->fonts->Get(FLAGS_font, "", 9, Color::grey80, Color::black);
     text->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(screen->width*.05, screen->height*.05));
    }
 };
@@ -475,8 +475,8 @@ struct FullscreenGUI : public GUI {
   Widget::Button play_button, close_button, decode_icon, fullscreen_button;
 
   FullscreenGUI(MyWindowState *S) : ws(S),
-    norm_font(FontDesc(FLAGS_default_font, "", 12, Color::grey70)),
-    text_font(FontDesc(FLAGS_default_font, "", 12, Color::white, Color::clear, FontDesc::Outline)),
+    norm_font(FontDesc(FLAGS_font, "", 12, Color::grey70)),
+    text_font(FontDesc(FLAGS_font, "", 12, Color::white, Color::clear, FontDesc::Outline)),
     play_button      (this, 0, "", MouseController::CB([=](){ ws->myMonitor=1; })),
     close_button     (this, 0, "", MouseController::CB([=](){ close=1; })),
     decode_icon      (this, 0, "", MouseController::CB()),
@@ -535,7 +535,7 @@ struct FVGUI : public GUI {
   FullscreenGUI *fullscreen_gui=0;
   MyWindowState ws;
 
-  FVGUI() : font(FontDesc(FLAGS_default_font, "", 12, Color::grey70, Color::black)),
+  FVGUI() : font(FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
   tab1(this, 0, "audio gui",  MouseController::CB(bind(&FVGUI::SetMyTab, this, 1))),
   tab2(this, 0, "video gui",  MouseController::CB(bind(&FVGUI::SetMyTab, this, 2))), 
   tab3(this, 0, "room model", MouseController::CB(bind(&FVGUI::SetMyTab, this, 3))) {
@@ -576,7 +576,7 @@ struct FVGUI : public GUI {
     if (ws.liveSG) ws.liveSG->Update(mic_samples);
     if (ws.stream) ws.stream->Update(mic_samples, app->camera->state.have_sample);
 
-#if defined(LFL_IPHONE) || defined(LFL_ANDROID)
+#ifdef LFL_MOBILE
     int orientation = NativeWindowOrientation();
     bool orientation_fs = orientation == 5 || orientation == 4 || orientation == 3;
     bool fullscreen = myTab == 4;
@@ -647,7 +647,7 @@ void MyWindowStartCB(Window *W) {
   W->shell->Add("server",        bind(&AudioGUI::ServerCmd,              fv_gui->audio_gui, _1));
   W->shell->Add("startcamera",   bind(&VideoGUI::StartCameraCmd,         fv_gui->video_gui, _1));
 
-#if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)
+#ifndef LFL_MOBILE
   AcousticModelFile *model = new AcousticModelFile();
   if (model->Open("AcousticModel", Asset::FileName("").c_str()) < 0) return ERROR(-1, "am read ", Asset::FileName(""));
   if (!(fv_gui->audio_gui->decodeModel = AcousticModel::FromModel1(model, true))) return ERROR(-1, "model create failed");
@@ -665,13 +665,13 @@ void MyWindowStartCB(Window *W) {
 }; // namespace LFL
 using namespace LFL;
 
-extern "C" void MyAppCreate() {
+extern "C" void MyAppCreate(int argc, const char* const* argv) {
   FLAGS_target_fps = 30;
-  FLAGS_lfapp_video = FLAGS_lfapp_audio = FLAGS_lfapp_input = FLAGS_lfapp_network = FLAGS_lfapp_camera = FLAGS_console = true;
+  FLAGS_enable_video = FLAGS_enable_audio = FLAGS_enable_input = FLAGS_enable_network = FLAGS_enable_camera = FLAGS_console = true;
   FLAGS_console_font = "Nobile.ttf";
-  FLAGS_default_font_flag = FLAGS_console_font_flag = 0;
+  FLAGS_font_flag = FLAGS_console_font_flag = 0;
   FLAGS_chans_in = -1;
-  app = new Application();
+  app = new Application(argc, argv);
   screen = new Window();
   my_app = new MyAppState();
   app->window_start_cb = MyWindowStartCB;
@@ -680,9 +680,9 @@ extern "C" void MyAppCreate() {
   app->exit_cb = []{ delete my_app; };
 }
 
-extern "C" int MyAppMain(int argc, const char* const* argv) {
-  if (app->Create(argc, argv, __FILE__)) return -1;
-  if (FLAGS_font_engine == "atlas") FLAGS_default_font = "Nobile.ttf";
+extern "C" int MyAppMain() {
+  if (app->Create(__FILE__)) return -1;
+  if (FLAGS_font_engine == "atlas") FLAGS_font = "Nobile.ttf";
 
   if (app->Init()) return -1;
   screen->gd->default_draw_mode = DrawMode::_3D;
@@ -715,7 +715,7 @@ extern "C" int MyAppMain(int argc, const char* const* argv) {
   my_app->soundasset.Add("snap", "", new RingSampler(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs);
   my_app->soundasset.Load();
 
-#if !defined(LFL_IPHONE) && !defined(LFL_ANDROID)
+#ifndef LFL_MOBILE
   HTTPServer *httpd = my_app->httpd = new HTTPServer(4040, false);
   if (app->net->Enable(httpd)) return -1;
   httpd->AddURL("/favicon.ico", new HTTPServer::FileResource(Asset::FileName("icon.ico"), "image/x-icon"));

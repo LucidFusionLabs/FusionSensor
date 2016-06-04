@@ -350,17 +350,17 @@ int FusionServer(int argc, const char* const* argv) {
 }; // namespace LFL
 using namespace LFL;
 
-extern "C" void MyAppCreate() {
-  FLAGS_lfapp_network = 1;
-  app = new Application();
+extern "C" void MyAppCreate(int argc, const char* const* argv) {
+  FLAGS_enable_network = 1;
+  app = new Application(argc, argv);
   screen = new Window();
 }
 
-extern "C" int MyAppMain(int argc, const char* const* argv) {
+extern "C" int MyAppMain() {
 #ifdef _WIN32
   if (argc>1) FLAGS_open_console = 1;
 #endif
-  if (app->Create(argc, argv, __FILE__)) return -1;
+  if (app->Create(__FILE__)) return -1;
   if (app->Init()) return -1;
 
   static const char *service_name = "LFL Fusion Server";
@@ -369,12 +369,12 @@ extern "C" int MyAppMain(int argc, const char* const* argv) {
   if (install) { service_install(service_name, argv[0]); exit=1; }
   if (uninstall) { service_uninstall(service_name); exit=1; }
 #endif
-  if (FLAGS_fg) { return FusionServer(argc, argv); }
+  if (FLAGS_fg) { return FusionServer(app->argc, app->argv); }
   if (exit) return 0;
 
 #ifdef _WIN32
   string exedir(argv[0], DirNameLen(argv[0]));
   chdir(exedir.c_str());
 #endif
-  return NTService::WrapMain(service_name, FusionServer, argc, argv);
+  return NTService::WrapMain(service_name, FusionServer, app->argc, app->argv);
 }
