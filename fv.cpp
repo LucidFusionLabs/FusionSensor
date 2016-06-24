@@ -41,8 +41,6 @@ DEFINE_int(camera_orientation, 3, "Camera orientation");
 DEFINE_string(speech_client, "auto", "Speech client send [manual, auto, flood]");
 
 struct MyAppState {
-  AssetMap asset;
-  SoundAssetMap soundasset;
   HTTPServer *httpd=0;
 } *my_app;
 
@@ -124,7 +122,7 @@ struct LiveSpectogram {
           Waveform::Decimated(win.Dimension(), &Color::white, &B, decimate).Draw(&gc, win); 
         }
         else {
-          SoundAsset *snap_sound = my_app->soundasset("snap");
+          SoundAsset *snap_sound = app->soundasset("snap");
           RingSampler::Handle B(snap_sound->wav.get(), snap_sound->wav->ring.back, samples);
           Waveform::Decimated(win.Dimension(), &Color::white, &B, decimate).Draw(&gc, win); 
         }
@@ -172,7 +170,7 @@ struct LiveCamera {
     Asset *cam = 0;
     if (!cam) cam = app->asset_loader->movie_playing ? &app->asset_loader->movie_playing->video : 0;
     if (!cam) cam = FLAGS_enable_camera ? camera : 0;
-    if (!cam) cam = my_app->asset("browser");
+    if (!cam) cam = app->asset("browser");
     return cam;
   }
 
@@ -266,9 +264,9 @@ struct AudioGUI : public GUI {
     CHECK(text_font.Load());
     Flow flow(&box, 0, &child_box);
     flow.layout.append_only = flow.cur_attr.blend = true;
-    play_button  .LayoutBox(&flow, norm_font, screen->Box(0,  -.85, .5, .15, .16, .0001).center(my_app->asset("but1")->tex.Dimension()));
-    decode_button.LayoutBox(&flow, norm_font, screen->Box(.5, -.85, .5, .15, .16, .0001).center(my_app->asset("but1")->tex.Dimension()));
-    record_button.LayoutBox(&flow, norm_font, screen->Box(0,  -.65,  1, .2,  .38, .0001).center(my_app->asset("onoff1")->tex.Dimension()));
+    play_button  .LayoutBox(&flow, norm_font, screen->Box(0,  -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
+    decode_button.LayoutBox(&flow, norm_font, screen->Box(.5, -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
+    record_button.LayoutBox(&flow, norm_font, screen->Box(0,  -.65,  1, .2,  .38, .0001).center(app->asset("onoff1")->tex.Dimension()));
 
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ monitor_hover = !monitor_hover; }));
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ if ( ws->myMonitor) MonitorCmd(vector<string>(1,"snap")); }));
@@ -283,19 +281,19 @@ struct AudioGUI : public GUI {
     if (decode && last_decode) { if (!ws->myMonitor) DecodeCmd(vector<string>(1, "snap")); decode=0; }
     last_decode = decode;
 
-    if (auto b = play_button  .GetDrawBox()) b->drawable = &my_app->asset(app->audio->Out.size() ? "but1" : "but0")->tex;
-    if (auto b = decode_button.GetDrawBox()) b->drawable = &my_app->asset((decode || ws->decoding)  ? "but1" : "but0")->tex;
-    if (auto b = record_button.GetDrawBox()) b->drawable = &my_app->asset(ws->myMonitor ? (monitor_hover ? "onoff1hover" : "onoff1") :
-                                                                          (monitor_hover ? "onoff0hover" : "onoff0"))->tex;
+    if (auto b = play_button  .GetDrawBox()) b->drawable = &app->asset(app->audio->Out.size() ? "but1" : "but0")->tex;
+    if (auto b = decode_button.GetDrawBox()) b->drawable = &app->asset((decode || ws->decoding)  ? "but1" : "but0")->tex;
+    if (auto b = record_button.GetDrawBox()) b->drawable = &app->asset(ws->myMonitor ? (monitor_hover ? "onoff1hover" : "onoff1") :
+                                                                       (monitor_hover ? "onoff0hover" : "onoff0"))->tex;
 
     /* live spectogram */
     float yp=0.6, ys=0.4, xbdr=0.05, ybdr=0.07;
     Box sb = screen->Box(0, yp, 1, ys, xbdr, ybdr);
     Box si = screen->Box(0, yp, 1, ys, xbdr+0.04, ybdr+0.035);
 
-    my_app->asset("sbg")->tex.Draw(&gc, sb);
+    app->asset("sbg")->tex.Draw(&gc, sb);
     ws->liveSG->Draw(si, ws->myMonitor, false, ws->AED.get());
-    my_app->asset("sgloss")->tex.Draw(&gc, sb);
+    app->asset("sgloss")->tex.Draw(&gc, sb);
 
     /* progress bar */
     if (app->audio->Out.size() && !ws->myMonitor) {
@@ -337,8 +335,8 @@ struct AudioGUI : public GUI {
   }
 
   void DrawCmd(const vector<string> &args) {
-    Asset *a = my_app->asset(IndexOrDefault(args, 0));
-    SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
+    Asset *a = app->asset(IndexOrDefault(args, 0));
+    SoundAsset *sa = app->soundasset(IndexOrDefault(args, 0));
     if (!a || !sa) return;
     bool recalibrate=1;
     RingSampler::Handle H(sa->wav.get());
@@ -346,8 +344,8 @@ struct AudioGUI : public GUI {
   }
 
   void SnapCmd(const vector<string> &args) {
-    Asset *a = my_app->asset(IndexOrDefault(args, 0));
-    SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
+    Asset *a = app->asset(IndexOrDefault(args, 0));
+    SoundAsset *sa = app->soundasset(IndexOrDefault(args, 0));
     if (!FLAGS_enable_audio || !a || !sa) return;
 
     FLAGS_speech_client = "manual";
@@ -377,7 +375,7 @@ struct AudioGUI : public GUI {
   }
 
   void DecodeCmd(const vector<string> &args) {
-    SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
+    SoundAsset *sa = app->soundasset(IndexOrDefault(args, 0));
     if (!sa) return INFO("decode <assset>");
     if (ws->AED && ws->AED->sink && ws->AED->sink->Connected()) return NetDecodeCmd(args);
 #ifndef LFL_MOBILE
@@ -395,7 +393,7 @@ struct AudioGUI : public GUI {
   }
 
   void NetDecodeCmd(const vector<string> &args) {
-    SoundAsset *sa = my_app->soundasset(IndexOrDefault(args, 0));
+    SoundAsset *sa = app->soundasset(IndexOrDefault(args, 0));
     if (!sa) { INFO("decode <assset>"); return; }
     if (!ws->AED || !ws->AED->sink || !ws->AED->sink->Connected()) { INFO("not connected"); return; }
 
@@ -418,7 +416,7 @@ struct AudioGUI : public GUI {
   }
 
   void ResynthCmd(const vector<string> &args) {
-    SoundAsset *sa = my_app->soundasset(args.size()?args[0]:"snap");
+    SoundAsset *sa = app->soundasset(args.size()?args[0]:"snap");
     if (sa) { Resynthesize(app->audio.get(), sa); }
   }
 };
@@ -433,7 +431,7 @@ struct VideoGUI : public GUI {
       if (app->camera->Init()) { FLAGS_enable_camera = false; return INFO("camera init failed"); }
       INFO("camera started");
     }
-    ws->liveCam = make_unique<LiveCamera>(my_app->asset("camera"), my_app->asset("camfx"));
+    ws->liveCam = make_unique<LiveCamera>(app->asset("camera"), app->asset("camfx"));
   }
 
   void Draw() {
@@ -455,16 +453,16 @@ struct RoomGUI {
   MyWindowState *ws;
   Scene scene;
   RoomGUI(MyWindowState *S) : ws(S) {
-    scene.Add(new Entity("axis",  my_app->asset("axis")));
-    scene.Add(new Entity("grid",  my_app->asset("grid")));
-    scene.Add(new Entity("room",  my_app->asset("room")));
-    scene.Add(new Entity("arrow", my_app->asset("arrow"), v3(1,.24,1)));
+    scene.Add(new Entity("axis",  app->asset("axis")));
+    scene.Add(new Entity("grid",  app->asset("grid")));
+    scene.Add(new Entity("room",  app->asset("room")));
+    scene.Add(new Entity("arrow", app->asset("arrow"), v3(1,.24,1)));
   }
 
   int Frame(LFL::Window *W, unsigned clicks, int flag) {
     scene.cam.Look(W->gd);
     scene.Get("arrow")->YawRight(clicks);	
-    scene.Draw(W->gd, &my_app->asset.vec);
+    scene.Draw(W->gd, &app->asset.vec);
     return 0;
   }
 };
@@ -612,7 +610,7 @@ void MyWindowInitCB(Window *W) {
 void MyWindowStartCB(Window *W) {
   FVGUI *fv_gui = W->AddGUI(make_unique<FVGUI>(W));
   if (FLAGS_console) W->InitConsole(Callback());
-  fv_gui->ws.liveSG = make_unique<LiveSpectogram>(my_app->asset("live"), my_app->asset("snap"));
+  fv_gui->ws.liveSG = make_unique<LiveSpectogram>(app->asset("live"), app->asset("snap"));
   fv_gui->ws.liveSG->XForm("mel");
   fv_gui->audio_gui = W->AddGUI(make_unique<AudioGUI>(W, &fv_gui->ws));
   fv_gui->video_gui = W->AddGUI(make_unique<VideoGUI>(W, &fv_gui->ws));
@@ -637,7 +635,7 @@ void MyWindowStartCB(Window *W) {
   binds->Add('q',            Bind::TimeCB(bind(&Entity::MoveDown,   &fv_gui->room_gui->scene.cam, _1)));
   binds->Add('e',            Bind::TimeCB(bind(&Entity::MoveUp,     &fv_gui->room_gui->scene.cam, _1)));
 
-  W->shell = make_unique<Shell>(&my_app->asset, &my_app->soundasset, nullptr);
+  W->shell = make_unique<Shell>();
   W->shell->Add("speech_client", bind(&AudioGUI::SpeechClientCmd,        fv_gui->audio_gui, _1));
   W->shell->Add("draw",          bind(&AudioGUI::DrawCmd,                fv_gui->audio_gui, _1));
   W->shell->Add("snap",          bind(&AudioGUI::SnapCmd,                fv_gui->audio_gui, _1));
@@ -690,33 +688,33 @@ extern "C" int MyAppMain() {
   if (app->Init()) return -1;
   screen->gd->default_draw_mode = DrawMode::_3D;
 
-  // asset.Add(name, texture, scale, translate, rotate, geometry, 0, 0, 0);
-  my_app->asset.Add("axis", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glAxis, _1, _2, _3));
-  my_app->asset.Add("grid", "", 0, 0, 0, Grid::Grid3D().release(), nullptr, 0, 0);
-  my_app->asset.Add("room", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glRoom, _1, _2, _3));
-  my_app->asset.Add("arrow", "", .005, 1, -90, "arrow.obj", nullptr, 0);
-  my_app->asset.Add("snap", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("live", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("browser", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("camera", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("camfx", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("sbg", "spectbg.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("sgloss", "spectgloss.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("onoff0", "onoff0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("onoff0hover", "onoff0hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("onoff1", "onoff1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("onoff1hover", "onoff1hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("but0", "but0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("but1", "but1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("butplay", "play-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("butclose", "close-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Add("butinfo", "info-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  my_app->asset.Load();
+  // app->asset.Add(name, texture, scale, translate, rotate, geometry, 0, 0, 0);
+  app->asset.Add("axis", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glAxis, _1, _2, _3));
+  app->asset.Add("grid", "", 0, 0, 0, Grid::Grid3D().release(), nullptr, 0, 0);
+  app->asset.Add("room", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glRoom, _1, _2, _3));
+  app->asset.Add("arrow", "", .005, 1, -90, "arrow.obj", nullptr, 0);
+  app->asset.Add("snap", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("live", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("browser", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("camera", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("camfx", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("sbg", "spectbg.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("sgloss", "spectgloss.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("onoff0", "onoff0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("onoff0hover", "onoff0hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("onoff1", "onoff1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("onoff1hover", "onoff1hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("but0", "but0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("but1", "but1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("butplay", "play-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("butclose", "close-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add("butinfo", "info-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Load();
 
-  // soundasset.Add(name, filename, ringbuf, channels, sample_rate, seconds);
-  my_app->soundasset.Add("draw", "Draw.wav", nullptr, 0, 0, 0);
-  my_app->soundasset.Add("snap", "", new RingSampler(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs);
-  my_app->soundasset.Load();
+  // app->soundasset.Add(name, filename, ringbuf, channels, sample_rate, seconds);
+  app->soundasset.Add("draw", "Draw.wav", nullptr, 0, 0, 0);
+  app->soundasset.Add("snap", "", new RingSampler(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs);
+  app->soundasset.Load();
 
 #ifndef LFL_MOBILE
   HTTPServer *httpd = my_app->httpd = new HTTPServer(4040, false);
