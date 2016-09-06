@@ -92,7 +92,7 @@ struct LiveSpectogram {
       if (transform) delete FFT;
 
       int ind = texture_slide * live->tex.width * Pixel::Size(live->tex.pf);
-      glSpectogram(screen->gd, Frame, live->tex.buf+ind, live->tex.pf, 1, feature_width, feature_width,
+      glSpectogram(app->focused->gd, Frame, live->tex.buf+ind, live->tex.pf, 1, feature_width, feature_width,
                    vmax, FLAGS_clip, 0, PowerDomain::abs);
 
       live->tex.Bind();
@@ -106,13 +106,13 @@ struct LiveSpectogram {
   }
 
   void Draw(Box win, bool onoff, bool fullscreen, AcousticEventDetector *AED) {
-    GraphicsContext gc(screen->gd);
+    GraphicsContext gc(app->focused->gd);
     int orientation = fullscreen ? 3 : 5;
     StringWordIter plot_iter(FLAGS_plot);
     for (string ploti = plot_iter.NextString(); !plot_iter.Done(); ploti = plot_iter.NextString()) { 
       if (ploti == "sg") {
-        if (onoff) live->tex.DrawCrimped(screen->gd, win, orientation, 0, -scroll);
-        else       snap->tex.DrawCrimped(screen->gd, win, orientation, 0, 0);
+        if (onoff) live->tex.DrawCrimped(gc.gd, win, orientation, 0, -scroll);
+        else       snap->tex.DrawCrimped(gc.gd, win, orientation, 0, 0);
       }
       else if (ploti == "wf") {
         static int decimate = 10;
@@ -152,9 +152,10 @@ struct LiveSpectogram {
     vert[0] = v2(xi, win.y);
     vert[1] = v2(xi, win.y+win.h);
 
-    screen->gd->DisableTexture();
-    Scene::Select(screen->gd, geom);
-    Scene::Draw(screen->gd, geom, 0);
+    auto gd = app->focused->gd;
+    gd->DisableTexture();
+    Scene::Select(gd, geom);
+    Scene::Draw(gd, geom, 0);
     delete geom;
   }
 };
@@ -213,8 +214,9 @@ struct LiveCamera {
   }
 
   void Draw(Box camw, Box fxw) {
-    Input()->tex.DrawCrimped(screen->gd, camw, FLAGS_camera_orientation, 0, 0);
-    camfx  ->tex.DrawCrimped(screen->gd, fxw,  FLAGS_camera_orientation, 0, 0);
+    auto gd = app->focused->gd;
+    Input()->tex.DrawCrimped(gd, camw, FLAGS_camera_orientation, 0, 0);
+    camfx  ->tex.DrawCrimped(gd, fxw,  FLAGS_camera_orientation, 0, 0);
   }
 };
 
@@ -241,7 +243,7 @@ struct AudioGUI : public GUI {
   AudioGUI(Window *W, MyWindowState *S) : GUI(W), ws(S),
     norm_font(FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
     text_font(FontDesc(FLAGS_font, "", 8,  Color::grey80, Color::black)),
-    play_button  (this, Singleton<DrawableNop>::Get(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) screen->shell->play(vector<string>(1,"snap")); })),
+    play_button  (this, Singleton<DrawableNop>::Get(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) W->shell->play(vector<string>(1,"snap")); })),
     decode_button(this, Singleton<DrawableNop>::Get(), "decode",  MouseController::CB([=](){ decode = true; })),
     record_button(this, Singleton<DrawableNop>::Get(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {
       play_button.v_align = decode_button.v_align = record_button.v_align = VAlign::Bottom;
@@ -252,21 +254,21 @@ struct AudioGUI : public GUI {
     transcript.clear();
     for (int i=0, l=decode.size(); i<l; i++) transcript += (!i ? "" : "  ") + decode[i].text;
     INFO("transcript: ", transcript);
-    if (ws->segments) screen->DelGUIPointer(&ws->segments);
-    ws->segments = screen->AddGUI(make_unique<PhoneticSegmentationGUI>(screen, decode, responselen, "snap"));
+    if (ws->segments) root->DelGUIPointer(&ws->segments);
+    ws->segments = root->AddGUI(make_unique<PhoneticSegmentationGUI>(root, decode, responselen, "snap"));
     ws->decoding = 0;
   }
 
   void Layout() {
     ResetGUI();
-    box = screen->Box();
+    box = root->Box();
     CHECK(norm_font.Load());
     CHECK(text_font.Load());
     Flow flow(&box, 0, &child_box);
     flow.layout.append_only = flow.cur_attr.blend = true;
-    play_button  .LayoutBox(&flow, norm_font, screen->Box(0,  -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
-    decode_button.LayoutBox(&flow, norm_font, screen->Box(.5, -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
-    record_button.LayoutBox(&flow, norm_font, screen->Box(0,  -.65,  1, .2,  .38, .0001).center(app->asset("onoff1")->tex.Dimension()));
+    play_button  .LayoutBox(&flow, norm_font, root->Box(0,  -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
+    decode_button.LayoutBox(&flow, norm_font, root->Box(.5, -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
+    record_button.LayoutBox(&flow, norm_font, root->Box(0,  -.65,  1, .2,  .38, .0001).center(app->asset("onoff1")->tex.Dimension()));
 
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ monitor_hover = !monitor_hover; }));
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ if ( ws->myMonitor) MonitorCmd(vector<string>(1,"snap")); }));
@@ -288,8 +290,8 @@ struct AudioGUI : public GUI {
 
     /* live spectogram */
     float yp=0.6, ys=0.4, xbdr=0.05, ybdr=0.07;
-    Box sb = screen->Box(0, yp, 1, ys, xbdr, ybdr);
-    Box si = screen->Box(0, yp, 1, ys, xbdr+0.04, ybdr+0.035);
+    Box sb = root->Box(0, yp, 1, ys, xbdr, ybdr);
+    Box si = root->Box(0, yp, 1, ys, xbdr+0.04, ybdr+0.035);
 
     app->asset("sbg")->tex.Draw(&gc, sb);
     ws->liveSG->Draw(si, ws->myMonitor, false, ws->AED.get());
@@ -309,17 +311,17 @@ struct AudioGUI : public GUI {
     if (!ws->myMonitor && ws->segments) ws->segments->Frame(si, norm_font);
 
     /* transcript */
-    if (transcript.size() && !ws->myMonitor) text_font->Draw(StrCat("transcript: ", transcript), point(screen->width*.05, screen->height*.05));
-    else text_font->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(screen->width*.05, screen->height*.05));
+    if (transcript.size() && !ws->myMonitor) text_font->Draw(StrCat("transcript: ", transcript), point(root->width*.05, root->height*.05));
+    else text_font->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(root->width*.05, root->height*.05));
 
     /* f0 */
     if (0) {
       RingSampler::Handle f0in(app->audio->IL.get(), app->audio->RL.next-FLAGS_feat_window, FLAGS_feat_window);
-      text_font->Draw(StringPrintf("hz %.0f", FundamentalFrequency(&f0in, FLAGS_feat_window, 0)), point(screen->width*.85, screen->height*.05));
+      text_font->Draw(StringPrintf("hz %.0f", FundamentalFrequency(&f0in, FLAGS_feat_window, 0)), point(root->width*.85, root->height*.05));
     }
 
     /* SNR */
-    if (ws->AED) text_font->Draw(StringPrintf("SNR = %.2f", ws->AED->SNR()), point(screen->width*.75, screen->height*.05));
+    if (ws->AED) text_font->Draw(StringPrintf("SNR = %.2f", ws->AED->SNR()), point(root->width*.75, root->height*.05));
   }
 
   void SpectogramTransformCmd(const vector<string> &args) { ws->liveSG->XForm(IndexOrDefault(args, 0).c_str()); }
@@ -340,7 +342,7 @@ struct AudioGUI : public GUI {
     if (!a || !sa) return;
     bool recalibrate=1;
     RingSampler::Handle H(sa->wav.get());
-    glSpectogram(screen->gd, &H, &a->tex, ws->liveSG->transform.get(), recalibrate?&ws->liveSG->vmax:0, FLAGS_clip);
+    glSpectogram(root->gd, &H, &a->tex, ws->liveSG->transform.get(), recalibrate?&ws->liveSG->vmax:0, FLAGS_clip);
   }
 
   void SnapCmd(const vector<string> &args) {
@@ -350,7 +352,7 @@ struct AudioGUI : public GUI {
 
     FLAGS_speech_client = "manual";
     transcript.clear();
-    if (ws->segments) screen->DelGUIPointer(&ws->segments);
+    if (ws->segments) root->DelGUIPointer(&ws->segments);
 
     app->audio->Snapshot(sa);
     DrawCmd(args);
@@ -368,8 +370,8 @@ struct AudioGUI : public GUI {
         transcript += (!i ? "" : "  ") + word->text;
       }
       if (decode.size()) {
-        if (ws->segments) screen->DelGUIPointer(&ws->segments);
-        ws->segments = screen->AddGUI(make_unique<PhoneticSegmentationGUI>(screen, decode, ws->AED->feature_rate * FLAGS_sample_secs, "snap"));
+        if (ws->segments) root->DelGUIPointer(&ws->segments);
+        ws->segments = root->AddGUI(make_unique<PhoneticSegmentationGUI>(root, decode, ws->AED->feature_rate * FLAGS_sample_secs, "snap"));
       }
     }
   }
@@ -386,8 +388,8 @@ struct AudioGUI : public GUI {
     unique_ptr<Matrix> features(Features::FromAsset(sa, Features::Flag::Full));
     unique_ptr<Matrix> viterbi(Decoder::DecodeFeatures(decodeModel, features.get(), 1024));
     transcript = Decoder::Transcript(decodeModel, viterbi.get());
-    if (ws->segments) screen->DelGUIPointer(&ws->segments);
-    ws->segments = screen->AddGUI(make_unique<PhoneticSegmentationGUI>(screen, decodeModel, viterbi.get(), "snap"));
+    if (ws->segments) root->DelGUIPointer(&ws->segments);
+    ws->segments = root->AddGUI(make_unique<PhoneticSegmentationGUI>(root, decodeModel, viterbi.get(), "snap"));
     if (transcript.size()) INFO(transcript);
     else                   INFO("decode failed");
   }
@@ -397,7 +399,7 @@ struct AudioGUI : public GUI {
     if (!sa) { INFO("decode <assset>"); return; }
     if (!ws->AED || !ws->AED->sink || !ws->AED->sink->Connected()) { INFO("not connected"); return; }
 
-    if (ws->segments) screen->DelGUIPointer(&ws->segments);
+    if (ws->segments) root->DelGUIPointer(&ws->segments);
     Matrix *features = Features::FromAsset(sa, Features::Flag::Storable);
     ws->AED->sink->decode.clear();
     int posted = ws->AED->sink->Write(features, 0, true, bind(&AudioGUI::HandleNetDecodeResponse, this, _1, _2));
@@ -439,13 +441,13 @@ struct VideoGUI : public GUI {
       if (app->camera->state.have_sample || app->asset_loader->movie_playing) ws->liveCam->Update();
 
       float yp=0.5, ys=0.5, xbdr=0.05, ybdr=0.07;
-      Box st = screen->Box(0, .5, 1, ys, xbdr+0.04, ybdr+0.035, xbdr+0.04, .01);
-      Box sb = screen->Box(0, 0,  1, ys, xbdr+0.04, .01, xbdr+0.04, ybdr+0.035);
+      Box st = root->Box(0, .5, 1, ys, xbdr+0.04, ybdr+0.035, xbdr+0.04, .01);
+      Box sb = root->Box(0, 0,  1, ys, xbdr+0.04, .01, xbdr+0.04, ybdr+0.035);
       ws->liveCam->Draw(st, sb);
     }
 
     static Font *text = app->fonts->Get(FLAGS_font, "", 9, Color::grey80, Color::black);
-    text->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(screen->width*.05, screen->height*.05));
+    text->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(root->width*.05, root->height*.05));
    }
 };
 
@@ -483,13 +485,13 @@ struct FullscreenGUI : public GUI {
     fullscreen_button(this, 0, "", MouseController::CB([=](){ decode=1; })) {}
 
   void Layout() {
-    box = screen->Box();
+    box = root->Box();
     CHECK(norm_font.Load());
     CHECK(text_font.Load());
     Flow flow(&box, 0, &child_box);
-    play_button      .LayoutBox(&flow, 0, screen->Box(0,    -1, .09, .07));
-    close_button     .LayoutBox(&flow, 0, screen->Box(0,  -.07, .09, .07));
-    fullscreen_button.LayoutBox(&flow, 0, screen->Box());
+    play_button      .LayoutBox(&flow, 0, root->Box(0,    -1, .09, .07));
+    close_button     .LayoutBox(&flow, 0, root->Box(0,  -.07, .09, .07));
+    fullscreen_button.LayoutBox(&flow, 0, root->Box());
     fullscreen_button.GetHitBox().run_only_if_first = true;
     // play_button.AddClickBox(play_button.box, MouseController::CB([=](){ if (!myMonitor) MyMonitor(vector<string>(1,"snap")); }));
   }
@@ -510,12 +512,12 @@ struct FullscreenGUI : public GUI {
     }
     lastdecode = decode;
 
-    ws->liveSG->Draw(screen->Box(), ws->myMonitor, true, ws->AED.get());
+    ws->liveSG->Draw(root->Box(), ws->myMonitor, true, ws->AED.get());
 
     if (ws->myMonitor) {
-      if (ws->AED && (ws->AED->words.size() || SpeechClientFlood())) AcousticEventGUI::Draw(ws->AED.get(), screen->Box(), true);
+      if (ws->AED && (ws->AED->words.size() || SpeechClientFlood())) AcousticEventGUI::Draw(ws->AED.get(), root->Box(), true);
     } else if (ws->segments) {
-      ws->segments->Frame(screen->Box(), norm_font, true);
+      ws->segments->Frame(root->Box(), norm_font, true);
 
       int total = ws->AED->feature_rate * FLAGS_sample_secs;
       for (auto it = ws->segments->segments.begin(); it != ws->segments->segments.end(); it++)
@@ -523,7 +525,7 @@ struct FullscreenGUI : public GUI {
     }
 
     if (decode || ws->decoding)
-      decode_icon.image->Draw(&gc, screen->Box(.9, -.07, .09, .07));
+      decode_icon.image->Draw(&gc, root->Box(.9, -.07, .09, .07));
   }
 };
 
@@ -559,10 +561,10 @@ struct FVGUI : public GUI {
 
   void Layout() {
     ResetGUI();
-    box = screen->Box();
+    box = root->Box();
     CHECK(font.Load());
     Flow flow(&box, 0, &child_box);
-    int tw=screen->width/3, th=screen->height*.05, lw=tab1.outline_w;
+    int tw=root->width/3, th=root->height*.05, lw=tab1.outline_w;
     flow.p.x+=1*lw-1; tab1.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
     flow.p.x+=2*lw-2; tab2.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
     flow.p.x+=2*lw-2; tab3.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
@@ -622,10 +624,10 @@ void MyWindowStartCB(Window *W) {
 
   BindMap *binds = W->AddInputController(make_unique<BindMap>());
   // binds->Bind(key,         callback,         arg));
-  binds->Add(Key::Backquote, Bind::CB(bind(&Shell::console,  screen->shell.get(), vector<string>())));
-  binds->Add(Key::Quote,     Bind::CB(bind(&Shell::console,  screen->shell.get(), vector<string>())));
-  binds->Add(Key::Escape,    Bind::CB(bind(&Shell::quit,     screen->shell.get(), vector<string>())));
-  binds->Add(Key::Return,    Bind::CB(bind(&Shell::grabmode, screen->shell.get(), vector<string>())));
+  binds->Add(Key::Backquote, Bind::CB(bind(&Shell::console,  W->shell.get(), vector<string>())));
+  binds->Add(Key::Quote,     Bind::CB(bind(&Shell::console,  W->shell.get(), vector<string>())));
+  binds->Add(Key::Escape,    Bind::CB(bind(&Shell::quit,     W->shell.get(), vector<string>())));
+  binds->Add(Key::Return,    Bind::CB(bind(&Shell::grabmode, W->shell.get(), vector<string>())));
   binds->Add(Key::LeftShift, Bind::TimeCB(bind(&Entity::RollLeft,   &fv_gui->room_gui->scene.cam, _1)));
   binds->Add(Key::Space,     Bind::TimeCB(bind(&Entity::RollRight,  &fv_gui->room_gui->scene.cam, _1)));
   binds->Add('w',            Bind::TimeCB(bind(&Entity::MoveFwd,    &fv_gui->room_gui->scene.cam, _1)));
@@ -635,7 +637,7 @@ void MyWindowStartCB(Window *W) {
   binds->Add('q',            Bind::TimeCB(bind(&Entity::MoveDown,   &fv_gui->room_gui->scene.cam, _1)));
   binds->Add('e',            Bind::TimeCB(bind(&Entity::MoveUp,     &fv_gui->room_gui->scene.cam, _1)));
 
-  W->shell = make_unique<Shell>();
+  W->shell = make_unique<Shell>(W);
   W->shell->Add("speech_client", bind(&AudioGUI::SpeechClientCmd,        fv_gui->audio_gui, _1));
   W->shell->Add("draw",          bind(&AudioGUI::DrawCmd,                fv_gui->audio_gui, _1));
   W->shell->Add("snap",          bind(&AudioGUI::SnapCmd,                fv_gui->audio_gui, _1));
@@ -673,11 +675,11 @@ extern "C" void MyAppCreate(int argc, const char* const* argv) {
   FLAGS_font_flag = FLAGS_console_font_flag = 0;
   FLAGS_chans_in = -1;
   app = new Application(argc, argv);
-  screen = new Window();
+  app->focused = new Window();
   my_app = new MyAppState();
   app->window_start_cb = MyWindowStartCB;
   app->window_init_cb = MyWindowInitCB;
-  app->window_init_cb(screen);
+  app->window_init_cb(app->focused);
   app->exit_cb = []{ delete my_app; };
 }
 
@@ -686,7 +688,7 @@ extern "C" int MyAppMain() {
   if (FLAGS_font_engine == "atlas") FLAGS_font = "Nobile.ttf";
 
   if (app->Init()) return -1;
-  screen->gd->default_draw_mode = DrawMode::_3D;
+  app->focused->gd->default_draw_mode = DrawMode::_3D;
 
   // app->asset.Add(name, texture, scale, translate, rotate, geometry, 0, 0, 0);
   app->asset.Add("axis", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glAxis, _1, _2, _3));
@@ -733,6 +735,6 @@ extern "C" int MyAppMain() {
                  "</html>\r\n"));
 #endif
 
-  app->StartNewWindow(screen);
+  app->StartNewWindow(app->focused);
   return app->Main();
 }
