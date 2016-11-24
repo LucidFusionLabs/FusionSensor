@@ -148,7 +148,7 @@ struct SpeechDecodeClient : public FeatureSink {
     inputlen = 0;
   }
 
-  void HTTPClientResponseCB(Connection *c, const char *h, const string &ct, const char *cb, int cl) { Read(c, cb, cl); }
+  int HTTPClientResponseCB(Connection *c, const char *h, const string &ct, const char *cb, int cl) { Read(c, cb, cl); return 0; }
 };
 
 }; // namespace LFL

@@ -9,14 +9,15 @@ lfl_add_target(fs EXECUTABLE SOURCES fs.cpp
 set(LFL_APP_LIB_FILES ${OPENCV_LIB_FILES})
 lfl_post_build_start(fs fs FusionServer)
 
+lfl_set_os_toolkit(FV)
 lfl_project(fv)
 lfl_add_package(fv SOURCES fv.cpp
                 COMPILE_DEFINITIONS -DLFL_OPENCV INCLUDE_DIRECTORIES ${OPENCV_INCLUDE}
-                LINK_LIBRARIES recognition ${LFL_APP_LIB} ${LFL_APP_FRAMEWORK} ${LFL_APP_GRAPHICS}
+                LINK_LIBRARIES recognition ${LFL_APP_LIB} ${FV_FRAMEWORK} ${FV_GRAPHICS}
                 ${LFL_APP_AUDIO} ${LFL_APP_CAMERA} app_opencv_matrix app_ffmpeg_fft
                 app_ffmpeg_resampler app_ffmpeg_loader app_iconv_convert
                 app_libpng_png app_null_jpeg app_null_gif app_null_ogg app_null_css app_null_ttf
-                app_null_ssl app_null_tu app_null_js app_ffmpeg_stream ${LFL_APP_OS})
+                app_null_ssl app_null_tu app_null_js app_ffmpeg_stream ${FV_TOOLKIT} ${LFL_APP_OS})
 set(LFL_APP_ASSET_FILES ${LFL_APP_ASSET_FILES} ${LFL_SOURCE_DIR}/core/app/assets/Nobile.*)
 set(LFL_APP_LIB_FILES ${LFL_APP_LIB_FILES} ${PORTAUDIO_LIB_FILES} ${FFMPEG_LIB_FILES})
 lfl_post_build_start(fv fv FusionViewer)
