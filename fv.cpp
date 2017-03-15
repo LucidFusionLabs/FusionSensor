@@ -312,7 +312,7 @@ struct AudioGUI : public GUI {
 
     /* transcript */
     if (transcript.size() && !ws->myMonitor) text_font->Draw(StrCat("transcript: ", transcript), point(root->width*.05, root->height*.05));
-    else text_font->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(root->width*.05, root->height*.05));
+    else text_font->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->width*.05, root->height*.05));
 
     /* f0 */
     if (0) {
@@ -447,7 +447,7 @@ struct VideoGUI : public GUI {
     }
 
     static Font *text = app->fonts->Get(FLAGS_font, "", 9, Color::grey80, Color::black);
-    text->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", app->FPS(), app->CamFPS()), point(root->width*.05, root->height*.05));
+    text->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->width*.05, root->height*.05));
    }
 };
 
@@ -675,7 +675,7 @@ extern "C" void MyAppCreate(int argc, const char* const* argv) {
   FLAGS_font_flag = FLAGS_console_font_flag = 0;
   FLAGS_chans_in = -1;
   app = new Application(argc, argv);
-  app->focused = new Window();
+  app->focused = Window::Create();
   my_app = new MyAppState();
   app->window_start_cb = MyWindowStartCB;
   app->window_init_cb = MyWindowInitCB;

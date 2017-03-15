@@ -1,5 +1,9 @@
 # $Id: CMakeLists.txt 1320 2014-10-26 08:12:52Z justin $
 
+if(LFL_MOBILE)
+  return()
+endif()
+
 lfl_add_target(fs EXECUTABLE SOURCES fs.cpp
                LINK_LIBRARIES recognition ${LFL_APP_LIB} app_null_framework app_null_graphics
                app_null_audio app_null_camera app_opencv_matrix app_ffmpeg_fft

@@ -353,7 +353,7 @@ using namespace LFL;
 extern "C" void MyAppCreate(int argc, const char* const* argv) {
   FLAGS_enable_network = 1;
   app = new Application(argc, argv);
-  app->focused = new Window();
+  app->focused = Window::Create();
 }
 
 extern "C" int MyAppMain() {
