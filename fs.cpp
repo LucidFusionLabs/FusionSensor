@@ -21,7 +21,7 @@
 #include "core/app/ipc.h"
 #include "core/ml/hmm.h"
 #include "core/speech/speech.h"
-#include "fs/fs.h"
+#include "FusionSensor/fs.h"
 
 #include "core/ml/corpus.h"
 #include "core/ml/counter.h"
