@@ -17,7 +17,7 @@
  */
 
 #include "core/app/app.h"
-#include "core/app/gui.h"
+#include "core/app/gl/view.h"
 #include "core/app/network.h"
 #include "core/app/camera.h"
 #include "core/app/audio.h"
