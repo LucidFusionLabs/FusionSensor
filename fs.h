@@ -1,5 +1,5 @@
 /*
- * $Id: fs.h 1336 2014-12-08 09:29:59Z justin $
+ * $Id$
  * Copyright (C) 2009 Lucid Fusion Labs
 
  * This program is free software: you can redistribute it and/or modify
@@ -24,20 +24,21 @@ struct AcousticEventHeader { long long timestamp; int m, n; };
 
 struct SpeechDecodeClient : public FeatureSink {
   FixedAllocator<65536> alloc;
+  SocketServices *net;
   Connection *conn=0;
   string host, path, flags;
   long long wrote=0, lastTimestamp=0;
   int flagstate=0;
   Callback resetCB;
 
-  SpeechDecodeClient(const Callback &rcb=Callback()) : resetCB(rcb) {}
+  SpeechDecodeClient(SocketServices *n, const Callback &rcb=Callback()) : net(n), resetCB(rcb) {}
   ~SpeechDecodeClient() { Reset(); }
 
   void Reset() { if (conn) conn->SetError(); conn=0; host.clear(); path.clear(); flags.clear(); flagstate=0; }
 
   int Connect(const char *url) {
     Reset();
-    conn = HTTPClient::PersistentConnection(url, &host, &path, bind(&SpeechDecodeClient::HTTPClientResponseCB, this, _1, _2, _3, _4, _5));
+    conn = HTTPClient::PersistentConnection(net, url, &host, &path, bind(&SpeechDecodeClient::HTTPClientResponseCB, this, _1, _2, _3, _4, _5));
     return 0;
   }
 

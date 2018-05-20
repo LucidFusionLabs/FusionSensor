@@ -1,5 +1,5 @@
 /*
- * $Id: fv.cpp 1336 2014-12-08 09:29:59Z justin $
+ * $Id$
  * Copyright (C) 2009 Lucid Fusion Labs
 
  * This program is free software: you can redistribute it and/or modify
@@ -21,6 +21,7 @@
 #include "core/app/network.h"
 #include "core/app/camera.h"
 #include "core/app/audio.h"
+#include "core/app/shell.h"
 #include "core/ml/hmm.h"
 #include "core/speech/speech.h"   
 #include "core/speech/voice.h"
@@ -40,9 +41,12 @@ DEFINE_bool(camera_effects, true, "Render camera effects");
 DEFINE_int(camera_orientation, 3, "Camera orientation");
 DEFINE_string(speech_client, "auto", "Speech client send [manual, auto, flood]");
 
-struct MyAppState {
+struct MyApp : public Application {
+  using Application::Application;
   HTTPServer *httpd=0;
-} *my_app;
+  void OnWindowInit(Window *W);
+  void OnWindowStart(Window *W);
+} *app;
 
 struct LiveSpectogram {
   int feature_rate, feature_width;
@@ -72,7 +76,7 @@ struct LiveSpectogram {
 
   void XForm(const string &n) {
     if (n == "mel") {
-      transform = unique_ptr<Matrix>(Features::FFT2Mel(FLAGS_feat_melbands, FLAGS_feat_minfreq, FLAGS_feat_maxfreq, FLAGS_feat_window, FLAGS_sample_rate)->Transpose(mDelA));
+      transform = Matrix::Transpose(Features::FFT2Mel(FLAGS_feat_melbands, FLAGS_feat_minfreq, FLAGS_feat_maxfreq, FLAGS_feat_window, FLAGS_sample_rate));
       Resize(FLAGS_feat_melbands);
     } else {
       transform.reset();
@@ -86,13 +90,15 @@ struct LiveSpectogram {
       const double *last = handle.Read(-1)->row(0);
       RingSampler::Handle L(app->audio->IL.get(), app->audio->RL.next-Behind(), FLAGS_feat_window);
 
-      Matrix *Frame, *FFT;
-      Frame = FFT = Spectogram(&L, transform ? 0 : handle.Write(), FLAGS_feat_window, FLAGS_feat_hop, FLAGS_feat_window, vector<double>(), PowerDomain::abs);
-      if (transform) Frame = Matrix::Mult(FFT, transform.get(), handle.Write());
-      if (transform) delete FFT;
+      Matrix *frame = handle.Write();
+      unique_ptr<Matrix> fft = Spectogram(&L, transform ? 0 : frame, FLAGS_feat_window, FLAGS_feat_hop, FLAGS_feat_window, vector<double>(), PowerDomain::abs);
+      if (transform) {
+        fft = Matrix::Mult(fft.get(), transform.get());
+        CHECK(frame->Assign(fft.get()));
+      }
 
       int ind = texture_slide * live->tex.width * Pixel::Size(live->tex.pf);
-      glSpectogram(app->focused->gd, Frame, live->tex.buf+ind, live->tex.pf, 1, feature_width, feature_width,
+      glSpectogram(app->focused->gd, frame, live->tex.buf+ind, live->tex.pf, 1, feature_width, feature_width,
                    vmax, FLAGS_clip, 0, PowerDomain::abs);
 
       live->tex.Bind();
@@ -220,7 +226,8 @@ struct LiveCamera {
   }
 };
 
-struct MyWindowState {
+struct FVViewInterface : public View {
+  using View::View;
   int myTab=1;
   bool decoding=0, myMonitor=1;
   unique_ptr<AcousticEventDetector> AED;
@@ -231,21 +238,21 @@ struct MyWindowState {
 };
 
 struct AudioView : public View {
-  MyWindowState *ws;
+  FVViewInterface *ws;
   int last_audio_count=1;
   bool monitor_hover=0, decode=0, last_decode=0;
   FontRef norm_font, text_font;
   Widget::Button play_button, decode_button, record_button;
   unique_ptr<VoiceModel> voice;
-  AcousticModel::Compiled *decodeModel = 0;
+  unique_ptr<AcousticModel::Compiled> decodeModel;
   string transcript, speech_client_last=FLAGS_speech_client;
 
-  AudioView(Window *W, MyWindowState *S) : View(W), ws(S),
-    norm_font(FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
-    text_font(FontDesc(FLAGS_font, "", 8,  Color::grey80, Color::black)),
-    play_button  (this, Singleton<DrawableNop>::Get(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) W->shell->play(vector<string>(1,"snap")); })),
-    decode_button(this, Singleton<DrawableNop>::Get(), "decode",  MouseController::CB([=](){ decode = true; })),
-    record_button(this, Singleton<DrawableNop>::Get(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {
+  AudioView(Window *W, FVViewInterface *S) : View(W), ws(S),
+    norm_font(W, FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
+    text_font(W, FontDesc(FLAGS_font, "", 8,  Color::grey80, Color::black)),
+    play_button  (this, Singleton<DrawableNop>::Set(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) W->shell->play(vector<string>(1,"snap")); })),
+    decode_button(this, Singleton<DrawableNop>::Set(), "decode",  MouseController::CB([=](){ decode = true; })),
+    record_button(this, Singleton<DrawableNop>::Set(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {
       play_button.v_align = decode_button.v_align = record_button.v_align = VAlign::Bottom;
       play_button.v_offset = decode_button.v_offset = -norm_font->Height();
   }
@@ -262,8 +269,8 @@ struct AudioView : public View {
   void Layout() {
     ResetView();
     box = root->Box();
-    CHECK(norm_font.Load());
-    CHECK(text_font.Load());
+    CHECK(norm_font.Load(root));
+    CHECK(text_font.Load(root));
     Flow flow(&box, 0, &child_box);
     flow.layout.append_only = flow.cur_attr.blend = true;
     play_button  .LayoutBox(&flow, norm_font, root->Box(0,  -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
@@ -272,7 +279,7 @@ struct AudioView : public View {
 
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ monitor_hover = !monitor_hover; }));
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ if ( ws->myMonitor) MonitorCmd(vector<string>(1,"snap")); }));
-    play_button.AddClickBox(record_button.box, MouseControllerCallback([=](){ if (!ws->myMonitor) SnapCmd(vector<string>(1,"snap")); }, true));
+    play_button.AddClickBox(record_button.box, MouseControllerCallback([=](){ if (!ws->myMonitor) SnapCmd(vector<string>(1,"snap")); }));
     // static Widget::Button fullscreenButton(&gui, 0, 0, sb, 0, setMyTab, (void*)4);
   }
 
@@ -305,23 +312,23 @@ struct AudioView : public View {
 
     /* acoustic event frame */
     if (ws->myMonitor && ws->AED && (ws->AED->words.size() || SpeechClientFlood()))
-      AcousticEventGUI::Draw(ws->AED.get(), si);
+      AcousticEventGUI::Draw(ws->AED.get(), root->gd, si);
 
     /* segmentation */
     if (!ws->myMonitor && ws->segments) ws->segments->Frame(si, norm_font);
 
     /* transcript */
-    if (transcript.size() && !ws->myMonitor) text_font->Draw(StrCat("transcript: ", transcript), point(root->width*.05, root->height*.05));
-    else text_font->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->width*.05, root->height*.05));
+    if (transcript.size() && !ws->myMonitor) text_font->Draw(root->gd, StrCat("transcript: ", transcript), point(root->gl_w*.05, root->gl_h*.05));
+    else text_font->Draw(root->gd, StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->gl_w*.05, root->gl_h*.05));
 
     /* f0 */
     if (0) {
       RingSampler::Handle f0in(app->audio->IL.get(), app->audio->RL.next-FLAGS_feat_window, FLAGS_feat_window);
-      text_font->Draw(StringPrintf("hz %.0f", FundamentalFrequency(&f0in, FLAGS_feat_window, 0)), point(root->width*.85, root->height*.05));
+      text_font->Draw(root->gd, StringPrintf("hz %.0f", FundamentalFrequency(&f0in, FLAGS_feat_window, 0)), point(root->gl_w*.85, root->gl_h*.05));
     }
 
     /* SNR */
-    if (ws->AED) text_font->Draw(StringPrintf("SNR = %.2f", ws->AED->SNR()), point(root->width*.75, root->height*.05));
+    if (ws->AED) text_font->Draw(root->gd, StringPrintf("SNR = %.2f", ws->AED->SNR()), point(root->gl_w*.75, root->gl_h*.05));
   }
 
   void SpectogramTransformCmd(const vector<string> &args) { ws->liveSG->XForm(IndexOrDefault(args, 0).c_str()); }
@@ -386,10 +393,10 @@ struct AudioView : public View {
     { return ERROR("decode error: not connected to server: ", -1); }
 
     unique_ptr<Matrix> features(Features::FromAsset(sa, Features::Flag::Full));
-    unique_ptr<Matrix> viterbi(Decoder::DecodeFeatures(decodeModel, features.get(), 1024));
-    transcript = Decoder::Transcript(decodeModel, viterbi.get());
+    unique_ptr<Matrix> viterbi(Decoder::DecodeFeatures(decodeModel.get(), features.get(), 1024));
+    transcript = Decoder::Transcript(decodeModel.get(), viterbi.get());
     if (ws->segments) root->DelViewPointer(&ws->segments);
-    ws->segments = root->AddView(make_unique<PhoneticSegmentationGUI>(root, decodeModel, viterbi.get(), "snap"));
+    ws->segments = root->AddView(make_unique<PhoneticSegmentationGUI>(root, decodeModel.get(), viterbi.get(), "snap"));
     if (transcript.size()) INFO(transcript);
     else                   INFO("decode failed");
   }
@@ -400,17 +407,16 @@ struct AudioView : public View {
     if (!ws->AED || !ws->AED->sink || !ws->AED->sink->Connected()) { INFO("not connected"); return; }
 
     if (ws->segments) root->DelViewPointer(&ws->segments);
-    Matrix *features = Features::FromAsset(sa, Features::Flag::Storable);
+    unique_ptr<Matrix> features = Features::FromAsset(sa, Features::Flag::Storable);
     ws->AED->sink->decode.clear();
-    int posted = ws->AED->sink->Write(features, 0, true, bind(&AudioView::HandleNetDecodeResponse, this, _1, _2));
-    delete features;
+    int posted = ws->AED->sink->Write(features.get(), 0, true, bind(&AudioView::HandleNetDecodeResponse, this, _1, _2));
     INFO("posted decode len=", posted);
     ws->decoding = 1;
   }
 
   void SynthCmd(const vector<string> &args) {
     if (!voice) return;
-    unique_ptr<RingSampler> synth(voice->Synth(Join(args, " ").c_str()));
+    unique_ptr<RingSampler> synth(voice->Synth(app, Join(args, " ").c_str()));
     if (!synth) return ERROR("synth ret 0");
     INFO("synth ", synth->ring.size);
     RingSampler::Handle B(synth.get());
@@ -424,8 +430,8 @@ struct AudioView : public View {
 };
 
 struct VideoView : public View {
-  MyWindowState *ws;
-  VideoView(Window *W, MyWindowState *S) : View(W), ws(S) { StartCameraCmd(vector<string>()); }
+  FVViewInterface *ws;
+  VideoView(Window *W, FVViewInterface *S) : View(W), ws(S) { StartCameraCmd(vector<string>()); }
 
   void StartCameraCmd(const vector<string>&) {
     if (!FLAGS_enable_camera) {
@@ -446,19 +452,19 @@ struct VideoView : public View {
       ws->liveCam->Draw(st, sb);
     }
 
-    static Font *text = app->fonts->Get(FLAGS_font, "", 9, Color::grey80, Color::black);
-    text->Draw(StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->width*.05, root->height*.05));
+    static Font *text = app->fonts->Get(root->gl_h, FLAGS_font, "", 9, Color::grey80, Color::black);
+    text->Draw(root->gd, StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->gl_w*.05, root->gl_h*.05));
    }
 };
 
 struct RoomView {
-  MyWindowState *ws;
+  FVViewInterface *ws;
   Scene scene;
-  RoomView(MyWindowState *S) : ws(S) {
-    scene.Add(new Entity("axis",  app->asset("axis")));
-    scene.Add(new Entity("grid",  app->asset("grid")));
-    scene.Add(new Entity("room",  app->asset("room")));
-    scene.Add(new Entity("arrow", app->asset("arrow"), v3(1,.24,1)));
+  RoomView(FVViewInterface *S) : ws(S) {
+    scene.Add(make_unique<Entity>("axis",  app->asset("axis")));
+    scene.Add(make_unique<Entity>("grid",  app->asset("grid")));
+    scene.Add(make_unique<Entity>("room",  app->asset("room")));
+    scene.Add(make_unique<Entity>("arrow", app->asset("arrow"), v3(1,.24,1)));
   }
 
   int Frame(LFL::Window *W, unsigned clicks, int flag) {
@@ -470,15 +476,15 @@ struct RoomView {
 };
 
 struct FullscreenView : public View {
-  MyWindowState *ws;
+  FVViewInterface *ws;
   bool decode=0, lastdecode=0, close=0;
   int monitorcount=0;
   FontRef norm_font, text_font;
   Widget::Button play_button, close_button, decode_icon, fullscreen_button;
 
-  FullscreenView(Window *W, MyWindowState *S) : View(W), ws(S),
-    norm_font(FontDesc(FLAGS_font, "", 12, Color::grey70)),
-    text_font(FontDesc(FLAGS_font, "", 12, Color::white, Color::clear, FontDesc::Outline)),
+  FullscreenView(Window *W, FVViewInterface *S) : View(W), ws(S),
+    norm_font(W, FontDesc(FLAGS_font, "", 12, Color::grey70)),
+    text_font(W, FontDesc(FLAGS_font, "", 12, Color::white, Color::clear, FontDesc::Outline)),
     play_button      (this, 0, "", MouseController::CB([=](){ ws->myMonitor=1; })),
     close_button     (this, 0, "", MouseController::CB([=](){ close=1; })),
     decode_icon      (this, 0, "", MouseController::CB()),
@@ -486,8 +492,8 @@ struct FullscreenView : public View {
 
   void Layout() {
     box = root->Box();
-    CHECK(norm_font.Load());
-    CHECK(text_font.Load());
+    CHECK(norm_font.Load(root));
+    CHECK(text_font.Load(root));
     Flow flow(&box, 0, &child_box);
     play_button      .LayoutBox(&flow, 0, root->Box(0,    -1, .09, .07));
     close_button     .LayoutBox(&flow, 0, root->Box(0,  -.07, .09, .07));
@@ -515,13 +521,13 @@ struct FullscreenView : public View {
     ws->liveSG->Draw(root->Box(), ws->myMonitor, true, ws->AED.get());
 
     if (ws->myMonitor) {
-      if (ws->AED && (ws->AED->words.size() || SpeechClientFlood())) AcousticEventGUI::Draw(ws->AED.get(), root->Box(), true);
+      if (ws->AED && (ws->AED->words.size() || SpeechClientFlood())) AcousticEventGUI::Draw(ws->AED.get(), root->gd, root->Box(), true);
     } else if (ws->segments) {
       ws->segments->Frame(root->Box(), norm_font, true);
 
       int total = ws->AED->feature_rate * FLAGS_sample_secs;
       for (auto it = ws->segments->segments.begin(); it != ws->segments->segments.end(); it++)
-        text_font->Draw(it->name, point(box.centerX(), box.percentY(float(it->beg)/total)), 0, Font::DrawFlag::Orientation(3));
+        text_font->Draw(root->gd, it->name, point(box.centerX(), box.percentY(float(it->beg)/total)), 0, Font::DrawFlag::Orientation(3));
     }
 
     if (decode || ws->decoding)
@@ -529,16 +535,15 @@ struct FullscreenView : public View {
   }
 };
 
-struct FVView : public View {
+struct FVView : public FVViewInterface {
   FontRef font;
   Widget::Button tab1, tab2, tab3;
   AudioView *audio_gui=0;
   VideoView *video_gui=0;
   unique_ptr<RoomView> room_gui;
   FullscreenView *fullscreen_gui=0;
-  MyWindowState ws;
 
-  FVView(Window *W) : View(W), font(FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
+  FVView(Window *W) : FVViewInterface(W), font(W, FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
   tab1(this, 0, "audio gui",  MouseController::CB(bind(&FVView::SetMyTab, this, 1))),
   tab2(this, 0, "video gui",  MouseController::CB(bind(&FVView::SetMyTab, this, 2))), 
   tab3(this, 0, "room model", MouseController::CB(bind(&FVView::SetMyTab, this, 3))) {
@@ -548,23 +553,23 @@ struct FVView : public View {
   }
 
   void SetMyTab(int a) { 
-    ws.myTab = a; 
-    audio_gui     ->active = ws.myTab == 1;
-    fullscreen_gui->active = ws.myTab == 4;
+    myTab = a; 
+    audio_gui     ->active = myTab == 1;
+    fullscreen_gui->active = myTab == 4;
   }
 
   void ReloadAED() { 
-    ws.AED = make_unique<AcousticEventDetector>(FLAGS_sample_rate/FLAGS_feat_hop,
-                                                new SpeechDecodeClient(bind(&FVView::ReloadAED, this)));
-    ws.AED->AlwaysComputeFeatures();
+    AED = make_unique<AcousticEventDetector>(app->audio.get(), FLAGS_sample_rate/FLAGS_feat_hop,
+                                             new SpeechDecodeClient(app->net.get(), bind(&FVView::ReloadAED, this)));
+    AED->AlwaysComputeFeatures();
   }
 
   void Layout() {
     ResetView();
     box = root->Box();
-    CHECK(font.Load());
+    CHECK(font.Load(root));
     Flow flow(&box, 0, &child_box);
-    int tw=root->width/3, th=root->height*.05, lw=tab1.outline_w;
+    int tw=root->gl_w/3, th=root->gl_h*.05, lw=tab1.outline_w;
     flow.p.x+=1*lw-1; tab1.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
     flow.p.x+=2*lw-2; tab2.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
     flow.p.x+=2*lw-2; tab3.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
@@ -575,9 +580,9 @@ struct FVView : public View {
     W->gd->DrawMode(DrawMode::_2D);
 
     int mic_samples = app->audio->mic_samples;
-    if (ws.AED) ws.AED->Update(mic_samples);
-    if (ws.liveSG) ws.liveSG->Update(mic_samples);
-    if (ws.stream) ws.stream->Update(mic_samples, app->camera->state.have_sample);
+    if (AED) AED->Update(mic_samples);
+    if (liveSG) liveSG->Update(mic_samples);
+    if (stream) stream->Update(mic_samples, app->camera->state.have_sample);
 
 #ifdef LFL_MOBILE
     int orientation = NativeWindowOrientation();
@@ -588,12 +593,12 @@ struct FVView : public View {
 #endif
 
     View::Draw();
-    if      (ws.myTab == 1) audio_gui->Draw();
-    else if (ws.myTab == 2) video_gui->Draw();
-    else if (ws.myTab == 3) {
+    if      (myTab == 1) audio_gui->Draw();
+    else if (myTab == 2) video_gui->Draw();
+    else if (myTab == 3) {
       ScopedDrawMode sdm(W->gd, DrawMode::_3D);
       room_gui->Frame(W, clicks, flag);
-    } else if (ws.myTab == 4) {
+    } else if (myTab == 4) {
       fullscreen_gui->Draw();
       if (fullscreen_gui->close) { fullscreen_gui->close=0; SetMyTab(1); }
     }
@@ -603,21 +608,21 @@ struct FVView : public View {
   }
 };
 
-void MyWindowInitCB(Window *W) {
-  W->width = 640;
-  W->height = 480;
+void MyApp::OnWindowInit(Window *W) {
+  W->gl_w = 640;
+  W->gl_h = 480;
   W->caption = "fusion viewer";
 }
 
-void MyWindowStartCB(Window *W) {
+void MyApp::OnWindowStart(Window *W) {
   FVView *fv_gui = W->AddView(make_unique<FVView>(W));
   if (FLAGS_console) W->InitConsole(Callback());
-  fv_gui->ws.liveSG = make_unique<LiveSpectogram>(app->asset("live"), app->asset("snap"));
-  fv_gui->ws.liveSG->XForm("mel");
-  fv_gui->audio_gui = W->AddView(make_unique<AudioView>(W, &fv_gui->ws));
-  fv_gui->video_gui = W->AddView(make_unique<VideoView>(W, &fv_gui->ws));
-  fv_gui->fullscreen_gui = W->AddView(make_unique<FullscreenView>(W, &fv_gui->ws));
-  fv_gui->room_gui = make_unique<RoomView>(&fv_gui->ws);
+  fv_gui->liveSG = make_unique<LiveSpectogram>(app->asset("live"), app->asset("snap"));
+  fv_gui->liveSG->XForm("mel");
+  fv_gui->audio_gui = W->AddView(make_unique<AudioView>(W, fv_gui));
+  fv_gui->video_gui = W->AddView(make_unique<VideoView>(W, fv_gui));
+  fv_gui->fullscreen_gui = W->AddView(make_unique<FullscreenView>(W, fv_gui));
+  fv_gui->room_gui = make_unique<RoomView>(fv_gui);
   fv_gui->SetMyTab(1);
   fv_gui->ReloadAED();
   W->frame_cb = bind(&FVView::Frame, fv_gui, _1, _2, _3);
@@ -652,35 +657,34 @@ void MyWindowStartCB(Window *W) {
 
 #ifndef LFL_MOBILE
   AcousticModelFile *model = new AcousticModelFile();
-  if (model->Open("AcousticModel", Asset::FileName("").c_str()) < 0) return ERROR(-1, "am read ", Asset::FileName(""));
+  if (model->Open("AcousticModel", app->FileName("").c_str()) < 0) return ERROR(-1, "am read ", app->FileName(""));
   if (!(fv_gui->audio_gui->decodeModel = AcousticModel::FromModel1(model, true))) return ERROR(-1, "model create failed");
   AcousticModel::ToCUDA(model);
 
-  PronunciationDict::Instance();
+  PronunciationDict::Instance(app);
   VoiceModel *voice = (fv_gui->audio_gui->voice = make_unique<VoiceModel>()).get();
-  if (voice->Read(Asset::FileName("").c_str()) < 0) return ERROR(-1, "voice read ", Asset::FileName(""));
+  if (voice->Read(app->FileName("").c_str()) < 0) return ERROR(-1, "voice read ", app->FileName(""));
 
-  fv_gui->ws.stream = new HTTPServer::StreamResource("flv", 32000, 300000);
-  my_app->httpd->AddURL("/stream.flv", fv_gui->ws.stream);
+  fv_gui->stream = new HTTPServer::StreamResource(app->audio.get(), app->camera.get(), "flv", 32000, 300000);
+  app->httpd->AddURL("/stream.flv", fv_gui->stream);
 #endif
 }
 
 }; // namespace LFL
 using namespace LFL;
 
-extern "C" void MyAppCreate(int argc, const char* const* argv) {
+extern "C" LFApp *MyAppCreate(int argc, const char* const* argv) {
   FLAGS_target_fps = 30;
   FLAGS_enable_video = FLAGS_enable_audio = FLAGS_enable_input = FLAGS_enable_network = FLAGS_enable_camera = FLAGS_console = true;
   FLAGS_console_font = "Nobile.ttf";
   FLAGS_font_flag = FLAGS_console_font_flag = 0;
   FLAGS_chans_in = -1;
-  app = new Application(argc, argv);
-  app->focused = Window::Create();
-  my_app = new MyAppState();
-  app->window_start_cb = MyWindowStartCB;
-  app->window_init_cb = MyWindowInitCB;
+  app = make_unique<MyApp>(argc, argv).release();
+  app->focused = CreateWindow(app).release();
+  app->window_start_cb = bind(&MyApp::OnWindowStart, app, _1);
+  app->window_init_cb = bind(&MyApp::OnWindowInit, app, _1);
   app->window_init_cb(app->focused);
-  app->exit_cb = []{ delete my_app; };
+  return app;
 }
 
 extern "C" int MyAppMain() {
@@ -691,39 +695,39 @@ extern "C" int MyAppMain() {
   app->focused->gd->default_draw_mode = DrawMode::_3D;
 
   // app->asset.Add(name, texture, scale, translate, rotate, geometry, 0, 0, 0);
-  app->asset.Add("axis", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glAxis, _1, _2, _3));
-  app->asset.Add("grid", "", 0, 0, 0, Grid::Grid3D().release(), nullptr, 0, 0);
-  app->asset.Add("room", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glRoom, _1, _2, _3));
-  app->asset.Add("arrow", "", .005, 1, -90, "arrow.obj", nullptr, 0);
-  app->asset.Add("snap", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("live", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("browser", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("camera", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("camfx", "", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("sbg", "spectbg.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("sgloss", "spectgloss.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("onoff0", "onoff0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("onoff0hover", "onoff0hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("onoff1", "onoff1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("onoff1hover", "onoff1hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("but0", "but0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("but1", "but1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("butplay", "play-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("butclose", "close-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
-  app->asset.Add("butinfo", "info-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "axis", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glAxis, _1, _2, _3));
+  app->asset.Add(app, "grid", "", 0, 0, 0, Grid::Grid3D().release(), nullptr, 0, 0);
+  app->asset.Add(app, "room", "", 0, 0, 0, nullptr, nullptr, 0, 0, bind(&glRoom, _1, _2, _3));
+  app->asset.Add(app, "arrow", "", .005, 1, -90, "arrow.obj", nullptr, 0);
+  app->asset.Add(app, "snap", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "live", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "browser", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "camera", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "camfx", "", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "sbg", "spectbg.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "sgloss", "spectgloss.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "onoff0", "onoff0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "onoff0hover", "onoff0hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "onoff1", "onoff1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "onoff1hover", "onoff1hover.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "but0", "but0.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "but1", "but1.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "butplay", "play-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "butclose", "close-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
+  app->asset.Add(app, "butinfo", "info-icon.png", 0, 0, 0, nullptr, nullptr, 0, 0);
   app->asset.Load();
 
   // app->soundasset.Add(name, filename, ringbuf, channels, sample_rate, seconds);
-  app->soundasset.Add("draw", "Draw.wav", nullptr, 0, 0, 0);
-  app->soundasset.Add("snap", "", new RingSampler(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs);
+  app->soundasset.Add(app, "draw", "Draw.wav", nullptr, 0, 0, 0);
+  app->soundasset.Add(app, "snap", "", make_unique<RingSampler>(FLAGS_sample_rate*FLAGS_sample_secs), 1, FLAGS_sample_rate, FLAGS_sample_secs);
   app->soundasset.Load();
 
 #ifndef LFL_MOBILE
-  HTTPServer *httpd = my_app->httpd = new HTTPServer(4040, false);
+  HTTPServer *httpd = app->httpd = new HTTPServer(app->net.get(), 4040, false);
   if (app->net->Enable(httpd)) return -1;
-  httpd->AddURL("/favicon.ico", new HTTPServer::FileResource(Asset::FileName("icon.ico"), "image/x-icon"));
-  httpd->AddURL("/test.flv", new HTTPServer::FileResource(Asset::FileName("test.flv"), "video/x-flv"));
-  httpd->AddURL("/mediaplayer.swf", new HTTPServer::FileResource(Asset::FileName("mediaplayer.swf"), "application/x-shockwave-flash"));
+  httpd->AddURL("/favicon.ico", new HTTPServer::FileResource(app->FileName("icon.ico"), "image/x-icon"));
+  httpd->AddURL("/test.flv", new HTTPServer::FileResource(app->FileName("test.flv"), "video/x-flv"));
+  httpd->AddURL("/mediaplayer.swf", new HTTPServer::FileResource(app->FileName("mediaplayer.swf"), "application/x-shockwave-flash"));
   httpd->AddURL("/", new HTTPServer::StringResource
                 ("text/html; charset=UTF-8",
                  "<html><h1>Web Page</h1>\r\n"

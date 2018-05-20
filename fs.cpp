@@ -1,5 +1,5 @@
 /*
- * $Id: fs.cpp 1336 2014-12-08 09:29:59Z justin $
+ * $Id$
  * Copyright (C) 2009 Lucid Fusion Labs
 
  * This program is free software: you can redistribute it and/or modify
@@ -46,6 +46,8 @@ DEFINE_int   (UseTransition,         1,                "Use transition probabili
 DEFINE_double(BeamWidth,             256,              "Beam search width");
 DEFINE_double(language_model_weight, 2,                "Language model weight");
 DEFINE_double(word_insertion_penalty,0,                "Word insertion penalty");
+
+Application *app;
 
 struct SpeechDecodeSession : public HTTPServer::Resource {
   static const int DeltaWindow=7, NBest=1, MaxResponseWords=128, MaxResponseTranscript=1024;
@@ -302,13 +304,13 @@ int FusionServer(int argc, const char* const* argv) {
   AcousticModel::ToCUDA(&recognize.acoustic_model);
 
   if (FLAGS_decode.size()) {
-    SoundAsset sa;
+    SoundAsset sa(app);
     sa.filename = FLAGS_decode;
     sa.Load();
     if (!sa.wav) FATAL("load ", FLAGS_decode, " failed");
 
     RingSampler::Handle B(sa.wav.get());
-    Matrix *feat = Features::FromBuf(&B);
+    unique_ptr<Matrix> feat = Features::FromBuf(&B);
     SpeechDecodeSession *decoder = new SpeechDecodeSession(&recognize, FLAGS_sample_rate/FLAGS_feat_hop, 3);
     HTTPServer::Response response = decoder->Request<double>(feat->row(0), feat->M, feat->N, 0, true);
 
@@ -325,7 +327,7 @@ int FusionServer(int argc, const char* const* argv) {
     return 0;
   }
 
-  HTTPServer httpd(4044, FLAGS_ssl);
+  HTTPServer httpd(app->net.get(), 4044, FLAGS_ssl);
   if (app->net->Enable(&httpd)) return -1;
   httpd.AddURL("/favicon.ico", new HTTPServer::FileResource("./assets/icon.ico", "image/x-icon"));
 
@@ -350,10 +352,11 @@ int FusionServer(int argc, const char* const* argv) {
 }; // namespace LFL
 using namespace LFL;
 
-extern "C" void MyAppCreate(int argc, const char* const* argv) {
+extern "C" LFApp *MyAppCreate(int argc, const char* const* argv) {
   FLAGS_enable_network = 1;
-  app = new Application(argc, argv);
-  app->focused = Window::Create();
+  app = make_unique<Application>(argc, argv).release();
+  app->focused = CreateWindow(app).release();
+  return app;
 }
 
 extern "C" int MyAppMain() {
