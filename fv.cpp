@@ -151,14 +151,14 @@ struct LiveSpectogram {
   void ProgressBar(Box win, float percent) {
     if (percent < 0 || percent > 1) return;
 
-    Geometry *geom = new Geometry(GraphicsDevice::Lines, 2, NullPointer<v2>(), 0, 0, Color(1.0,1.0,1.0));
+    auto gd = app->focused->gd;
+    Geometry *geom = new Geometry(gd->c.Lines, 2, NullPointer<v2>(), 0, 0, Color(1.0,1.0,1.0));
     v2 *vert = reinterpret_cast<v2*>(&geom->vert[0]);
 
     float xi = win.percentX(percent);
     vert[0] = v2(xi, win.y);
     vert[1] = v2(xi, win.y+win.h);
 
-    auto gd = app->focused->gd;
     gd->DisableTexture();
     Scene::Select(gd, geom);
     Scene::Draw(gd, geom, 0);
@@ -657,13 +657,13 @@ void MyApp::OnWindowStart(Window *W) {
 
 #ifndef LFL_MOBILE
   AcousticModelFile *model = new AcousticModelFile();
-  if (model->Open("AcousticModel", app->FileName("").c_str()) < 0) return ERROR(-1, "am read ", app->FileName(""));
+  if (model->Open(&app->localfs, "AcousticModel", app->FileName("").c_str()) < 0) return ERROR(-1, "am read ", app->FileName(""));
   if (!(fv_gui->audio_gui->decodeModel = AcousticModel::FromModel1(model, true))) return ERROR(-1, "model create failed");
   AcousticModel::ToCUDA(model);
 
   PronunciationDict::Instance(app);
   VoiceModel *voice = (fv_gui->audio_gui->voice = make_unique<VoiceModel>()).get();
-  if (voice->Read(app->FileName("").c_str()) < 0) return ERROR(-1, "voice read ", app->FileName(""));
+  if (voice->Read(&app->localfs, app->FileName("").c_str()) < 0) return ERROR(-1, "voice read ", app->FileName(""));
 
   fv_gui->stream = new HTTPServer::StreamResource(app->audio.get(), app->camera.get(), "flv", 32000, 300000);
   app->httpd->AddURL("/stream.flv", fv_gui->stream);
@@ -680,14 +680,14 @@ extern "C" LFApp *MyAppCreate(int argc, const char* const* argv) {
   FLAGS_font_flag = FLAGS_console_font_flag = 0;
   FLAGS_chans_in = -1;
   app = make_unique<MyApp>(argc, argv).release();
-  app->focused = CreateWindow(app).release();
+  app->focused = app->framework->ConstructWindow(app).release();
   app->window_start_cb = bind(&MyApp::OnWindowStart, app, _1);
   app->window_init_cb = bind(&MyApp::OnWindowInit, app, _1);
   app->window_init_cb(app->focused);
   return app;
 }
 
-extern "C" int MyAppMain() {
+extern "C" int MyAppMain(LFApp*) {
   if (app->Create(__FILE__)) return -1;
   if (FLAGS_font_engine == "atlas") FLAGS_font = "Nobile.ttf";
 

@@ -300,7 +300,7 @@ struct SpeechDecodeServer : public HTTPServer::SessionResource {
 
 int FusionServer(int argc, const char* const* argv) {
   RecognitionModel recognize;
-  if (recognize.Read("RecognitionNetwork", FLAGS_modeldir.c_str(), FLAGS_WantIter)) FATAL("open RecognitionNetwork ", FLAGS_modeldir);
+  if (recognize.Read(&app->localfs, "RecognitionNetwork", FLAGS_modeldir.c_str(), FLAGS_WantIter)) FATAL("open RecognitionNetwork ", FLAGS_modeldir);
   AcousticModel::ToCUDA(&recognize.acoustic_model);
 
   if (FLAGS_decode.size()) {
@@ -355,11 +355,11 @@ using namespace LFL;
 extern "C" LFApp *MyAppCreate(int argc, const char* const* argv) {
   FLAGS_enable_network = 1;
   app = make_unique<Application>(argc, argv).release();
-  app->focused = CreateWindow(app).release();
+  app->focused = app->framework->ConstructWindow(app).release();
   return app;
 }
 
-extern "C" int MyAppMain() {
+extern "C" int MyAppMain(LFApp*) {
 #ifdef _WIN32
   if (argc>1) FLAGS_open_console = 1;
 #endif
