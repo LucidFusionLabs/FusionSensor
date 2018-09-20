@@ -231,7 +231,7 @@ struct FVViewInterface : public View {
   int myTab=1;
   bool decoding=0, myMonitor=1;
   unique_ptr<AcousticEventDetector> AED;
-  PhoneticSegmentationGUI *segments=0;
+  PhoneticSegmentationView *segments=0;
   unique_ptr<LiveCamera> liveCam;
   unique_ptr<LiveSpectogram> liveSG;
   HTTPServer::StreamResource *stream = 0;
@@ -247,13 +247,13 @@ struct AudioView : public View {
   unique_ptr<AcousticModel::Compiled> decodeModel;
   string transcript, speech_client_last=FLAGS_speech_client;
 
-  AudioView(Window *W, FVViewInterface *S) : View(W), ws(S),
+  AudioView(Window *W, FVViewInterface *S) : View(W, "AudioView"), ws(S),
     norm_font(W, FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
     text_font(W, FontDesc(FLAGS_font, "", 8,  Color::grey80, Color::black)),
     play_button  (this, Singleton<DrawableNop>::Set(), "play",    MouseController::CB([=](){ if (!app->audio->Out.size()) W->shell->play(vector<string>(1,"snap")); })),
     decode_button(this, Singleton<DrawableNop>::Set(), "decode",  MouseController::CB([=](){ decode = true; })),
     record_button(this, Singleton<DrawableNop>::Set(), "monitor", MouseController::CB([=](){ ws->myMonitor = !ws->myMonitor; })) {
-      play_button.v_align = decode_button.v_align = record_button.v_align = VAlign::Bottom;
+      play_button.v_align = decode_button.v_align = record_button.v_align = Align::Bottom;
       play_button.v_offset = decode_button.v_offset = -norm_font->Height();
   }
 
@@ -262,29 +262,30 @@ struct AudioView : public View {
     for (int i=0, l=decode.size(); i<l; i++) transcript += (!i ? "" : "  ") + decode[i].text;
     INFO("transcript: ", transcript);
     if (ws->segments) root->DelViewPointer(&ws->segments);
-    ws->segments = root->AddView(make_unique<PhoneticSegmentationGUI>(root, decode, responselen, "snap"));
+    ws->segments = root->AddView(make_unique<PhoneticSegmentationView>(root, decode, responselen, "snap"));
     ws->decoding = 0;
   }
 
-  void Layout() {
+  View *Layout(Flow *flow_in=nullptr) override {
     ResetView();
-    box = root->Box();
+    box = root->ViewBox();
     CHECK(norm_font.Load(root));
     CHECK(text_font.Load(root));
     Flow flow(&box, 0, &child_box);
     flow.layout.append_only = flow.cur_attr.blend = true;
-    play_button  .LayoutBox(&flow, norm_font, root->Box(0,  -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
-    decode_button.LayoutBox(&flow, norm_font, root->Box(.5, -.85, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
-    record_button.LayoutBox(&flow, norm_font, root->Box(0,  -.65,  1, .2,  .38, .0001).center(app->asset("onoff1")->tex.Dimension()));
+    play_button  .LayoutBox(&flow, norm_font, box.Scale(0,  .15, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
+    decode_button.LayoutBox(&flow, norm_font, box.Scale(.5, .15, .5, .15, .16, .0001).center(app->asset("but1")->tex.Dimension()));
+    record_button.LayoutBox(&flow, norm_font, box.Scale(0,  .35,  1, .2,  .38, .0001).center(app->asset("onoff1")->tex.Dimension()));
 
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ monitor_hover = !monitor_hover; }));
     play_button.AddHoverBox(record_button.box, MouseController::CB([=](){ if ( ws->myMonitor) MonitorCmd(vector<string>(1,"snap")); }));
     play_button.AddClickBox(record_button.box, MouseControllerCallback([=](){ if (!ws->myMonitor) SnapCmd(vector<string>(1,"snap")); }));
     // static Widget::Button fullscreenButton(&gui, 0, 0, sb, 0, setMyTab, (void*)4);
+    return this;
   }
 
-  void Draw() {
-    View::Draw();
+  void Draw(const point &p) override {
+    View::Draw(p);
     GraphicsContext gc(root->gd);
     last_audio_count = app->audio->Out.size();
     if (decode && last_decode) { if (!ws->myMonitor) DecodeCmd(vector<string>(1, "snap")); decode=0; }
@@ -297,8 +298,8 @@ struct AudioView : public View {
 
     /* live spectogram */
     float yp=0.6, ys=0.4, xbdr=0.05, ybdr=0.07;
-    Box sb = root->Box(0, yp, 1, ys, xbdr, ybdr);
-    Box si = root->Box(0, yp, 1, ys, xbdr+0.04, ybdr+0.035);
+    Box sb = root->Box().Scale(0, yp, 1, ys, xbdr, ybdr);
+    Box si = root->Box().Scale(0, yp, 1, ys, xbdr+0.04, ybdr+0.035);
 
     app->asset("sbg")->tex.Draw(&gc, sb);
     ws->liveSG->Draw(si, ws->myMonitor, false, ws->AED.get());
@@ -319,7 +320,7 @@ struct AudioView : public View {
 
     /* transcript */
     if (transcript.size() && !ws->myMonitor) text_font->Draw(root->gd, StrCat("transcript: ", transcript), point(root->gl_w*.05, root->gl_h*.05));
-    else text_font->Draw(root->gd, StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->gl_w*.05, root->gl_h*.05));
+    else text_font->Draw(root->gd, StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera ? app->camera->fps.FPS() : 0), point(root->gl_w*.05, root->gl_h*.05));
 
     /* f0 */
     if (0) {
@@ -378,7 +379,7 @@ struct AudioView : public View {
       }
       if (decode.size()) {
         if (ws->segments) root->DelViewPointer(&ws->segments);
-        ws->segments = root->AddView(make_unique<PhoneticSegmentationGUI>(root, decode, ws->AED->feature_rate * FLAGS_sample_secs, "snap"));
+        ws->segments = root->AddView(make_unique<PhoneticSegmentationView>(root, decode, ws->AED->feature_rate * FLAGS_sample_secs, "snap"));
       }
     }
   }
@@ -396,7 +397,7 @@ struct AudioView : public View {
     unique_ptr<Matrix> viterbi(Decoder::DecodeFeatures(decodeModel.get(), features.get(), 1024));
     transcript = Decoder::Transcript(decodeModel.get(), viterbi.get());
     if (ws->segments) root->DelViewPointer(&ws->segments);
-    ws->segments = root->AddView(make_unique<PhoneticSegmentationGUI>(root, decodeModel.get(), viterbi.get(), "snap"));
+    ws->segments = root->AddView(make_unique<PhoneticSegmentationView>(root, decodeModel.get(), viterbi.get(), "snap"));
     if (transcript.size()) INFO(transcript);
     else                   INFO("decode failed");
   }
@@ -431,7 +432,13 @@ struct AudioView : public View {
 
 struct VideoView : public View {
   FVViewInterface *ws;
-  VideoView(Window *W, FVViewInterface *S) : View(W), ws(S) { StartCameraCmd(vector<string>()); }
+  VideoView(Window *W, FVViewInterface *S) : View(W, "VideoView"), ws(S) {
+    if (app->camera) InitLiveCam();
+  }
+
+  void InitLiveCam() {
+    ws->liveCam = make_unique<LiveCamera>(app->asset("camera"), app->asset("camfx"));
+  }
 
   void StartCameraCmd(const vector<string>&) {
     if (!FLAGS_enable_camera) {
@@ -439,21 +446,21 @@ struct VideoView : public View {
       if (app->camera->Init()) { FLAGS_enable_camera = false; return INFO("camera init failed"); }
       INFO("camera started");
     }
-    ws->liveCam = make_unique<LiveCamera>(app->asset("camera"), app->asset("camfx"));
+    InitLiveCam();
   }
 
-  void Draw() {
+  void Draw(const point &p) override {
     if (ws->liveCam) {
       if (app->camera->state.have_sample || app->asset_loader->movie_playing) ws->liveCam->Update();
 
       float yp=0.5, ys=0.5, xbdr=0.05, ybdr=0.07;
-      Box st = root->Box(0, .5, 1, ys, xbdr+0.04, ybdr+0.035, xbdr+0.04, .01);
-      Box sb = root->Box(0, 0,  1, ys, xbdr+0.04, .01, xbdr+0.04, ybdr+0.035);
+      Box st = root->Box().Scale(0, .5, 1, ys, xbdr+0.04, ybdr+0.035, xbdr+0.04, .01);
+      Box sb = root->Box().Scale(0, 0,  1, ys, xbdr+0.04, .01, xbdr+0.04, ybdr+0.035);
       ws->liveCam->Draw(st, sb);
     }
 
     static Font *text = app->fonts->Get(root->gl_h, FLAGS_font, "", 9, Color::grey80, Color::black);
-    text->Draw(root->gd, StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera->fps.FPS()), point(root->gl_w*.05, root->gl_h*.05));
+    text->Draw(root->gd, StringPrintf("press tick for console - FPS = %.2f - CR = %.2f", root->fps.FPS(), app->camera ? app->camera->fps.FPS() : 0), point(root->gl_w*.05, root->gl_h*.05));
    }
 };
 
@@ -482,7 +489,7 @@ struct FullscreenView : public View {
   FontRef norm_font, text_font;
   Widget::Button play_button, close_button, decode_icon, fullscreen_button;
 
-  FullscreenView(Window *W, FVViewInterface *S) : View(W), ws(S),
+  FullscreenView(Window *W, FVViewInterface *S) : View(W, "FullscreenView"), ws(S),
     norm_font(W, FontDesc(FLAGS_font, "", 12, Color::grey70)),
     text_font(W, FontDesc(FLAGS_font, "", 12, Color::white, Color::clear, FontDesc::Outline)),
     play_button      (this, 0, "", MouseController::CB([=](){ ws->myMonitor=1; })),
@@ -490,20 +497,21 @@ struct FullscreenView : public View {
     decode_icon      (this, 0, "", MouseController::CB()),
     fullscreen_button(this, 0, "", MouseController::CB([=](){ decode=1; })) {}
 
-  void Layout() {
+  View *Layout(Flow *flow_in=nullptr) override {
     box = root->Box();
     CHECK(norm_font.Load(root));
     CHECK(text_font.Load(root));
     Flow flow(&box, 0, &child_box);
-    play_button      .LayoutBox(&flow, 0, root->Box(0,    -1, .09, .07));
-    close_button     .LayoutBox(&flow, 0, root->Box(0,  -.07, .09, .07));
+    play_button      .LayoutBox(&flow, 0, root->Box().Scale(0,    -1, .09, .07));
+    close_button     .LayoutBox(&flow, 0, root->Box().Scale(0,  -.07, .09, .07));
     fullscreen_button.LayoutBox(&flow, 0, root->Box());
     fullscreen_button.GetHitBox().run_only_if_first = true;
     // play_button.AddClickBox(play_button.box, MouseController::CB([=](){ if (!myMonitor) MyMonitor(vector<string>(1,"snap")); }));
+    return this;
   }
 
-  void Draw() {
-    View::Draw();
+  void Draw(const point &p) override {
+    View::Draw(p);
     GraphicsContext gc(root->gd);
     if (ws->myMonitor) monitorcount++;
     else monitorcount = 0;
@@ -531,19 +539,19 @@ struct FullscreenView : public View {
     }
 
     if (decode || ws->decoding)
-      decode_icon.image->Draw(&gc, root->Box(.9, -.07, .09, .07));
+      decode_icon.image->Draw(&gc, root->Box().Scale(.9, -.07, .09, .07));
   }
 };
 
 struct FVView : public FVViewInterface {
   FontRef font;
   Widget::Button tab1, tab2, tab3;
-  AudioView *audio_gui=0;
-  VideoView *video_gui=0;
-  unique_ptr<RoomView> room_gui;
-  FullscreenView *fullscreen_gui=0;
+  AudioView *audio_view=0;
+  VideoView *video_view=0;
+  unique_ptr<RoomView> room_view;
+  FullscreenView *fullscreen_view=0;
 
-  FVView(Window *W) : FVViewInterface(W), font(W, FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
+  FVView(Window *W) : FVViewInterface(W, "FVView"), font(W, FontDesc(FLAGS_font, "", 12, Color::grey70, Color::black)),
   tab1(this, 0, "audio gui",  MouseController::CB(bind(&FVView::SetMyTab, this, 1))),
   tab2(this, 0, "video gui",  MouseController::CB(bind(&FVView::SetMyTab, this, 2))), 
   tab3(this, 0, "room model", MouseController::CB(bind(&FVView::SetMyTab, this, 3))) {
@@ -554,8 +562,8 @@ struct FVView : public FVViewInterface {
 
   void SetMyTab(int a) { 
     myTab = a; 
-    audio_gui     ->active = myTab == 1;
-    fullscreen_gui->active = myTab == 4;
+    audio_view     ->active = myTab == 1;
+    fullscreen_view->active = myTab == 4;
   }
 
   void ReloadAED() { 
@@ -564,15 +572,16 @@ struct FVView : public FVViewInterface {
     AED->AlwaysComputeFeatures();
   }
 
-  void Layout() {
+  View *Layout(Flow *flow_in=nullptr) override {
     ResetView();
-    box = root->Box();
+    box = root->ViewBox();
     CHECK(font.Load(root));
     Flow flow(&box, 0, &child_box);
     int tw=root->gl_w/3, th=root->gl_h*.05, lw=tab1.outline_w;
     flow.p.x+=1*lw-1; tab1.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
     flow.p.x+=2*lw-2; tab2.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
     flow.p.x+=2*lw-2; tab3.Layout(&flow, font, point(tw-lw*2+2, th-lw*2+2));
+    return this;
   }
 
   int Frame(LFL::Window *W, unsigned clicks, int flag) {
@@ -582,7 +591,7 @@ struct FVView : public FVViewInterface {
     int mic_samples = app->audio->mic_samples;
     if (AED) AED->Update(mic_samples);
     if (liveSG) liveSG->Update(mic_samples);
-    if (stream) stream->Update(mic_samples, app->camera->state.have_sample);
+    if (stream) stream->Update(mic_samples, app->camera ? app->camera->state.have_sample : false);
 
 #ifdef LFL_MOBILE
     int orientation = NativeWindowOrientation();
@@ -592,15 +601,16 @@ struct FVView : public FVViewInterface {
     if (!orientation_fs && fullscreen) myTab = 1;
 #endif
 
-    View::Draw();
-    if      (myTab == 1) audio_gui->Draw();
-    else if (myTab == 2) video_gui->Draw();
+    point p = W->Box().TopLeft();
+    View::Draw(p);
+    if      (myTab == 1) audio_view->Draw(p);
+    else if (myTab == 2) video_view->Draw(p);
     else if (myTab == 3) {
       ScopedDrawMode sdm(W->gd, DrawMode::_3D);
-      room_gui->Frame(W, clicks, flag);
+      room_view->Frame(W, clicks, flag);
     } else if (myTab == 4) {
-      fullscreen_gui->Draw();
-      if (fullscreen_gui->close) { fullscreen_gui->close=0; SetMyTab(1); }
+      fullscreen_view->Draw(p);
+      if (fullscreen_view->close) { fullscreen_view->close=0; SetMyTab(1); }
     }
 
     W->DrawDialogs();
@@ -615,17 +625,18 @@ void MyApp::OnWindowInit(Window *W) {
 }
 
 void MyApp::OnWindowStart(Window *W) {
-  FVView *fv_gui = W->AddView(make_unique<FVView>(W));
+  FVView *fv_view = W->AddView(make_unique<FVView>(W));
   if (FLAGS_console) W->InitConsole(Callback());
-  fv_gui->liveSG = make_unique<LiveSpectogram>(app->asset("live"), app->asset("snap"));
-  fv_gui->liveSG->XForm("mel");
-  fv_gui->audio_gui = W->AddView(make_unique<AudioView>(W, fv_gui));
-  fv_gui->video_gui = W->AddView(make_unique<VideoView>(W, fv_gui));
-  fv_gui->fullscreen_gui = W->AddView(make_unique<FullscreenView>(W, fv_gui));
-  fv_gui->room_gui = make_unique<RoomView>(fv_gui);
-  fv_gui->SetMyTab(1);
-  fv_gui->ReloadAED();
-  W->frame_cb = bind(&FVView::Frame, fv_gui, _1, _2, _3);
+  fv_view->liveSG = make_unique<LiveSpectogram>(app->asset("live"), app->asset("snap"));
+  fv_view->liveSG->XForm("mel");
+  fv_view->audio_view = W->AddView(make_unique<AudioView>(W, fv_view));
+  fv_view->video_view = W->AddView(make_unique<VideoView>(W, fv_view));
+  fv_view->fullscreen_view = W->AddView(make_unique<FullscreenView>(W, fv_view));
+  fv_view->room_view = make_unique<RoomView>(fv_view);
+  fv_view->SetMyTab(1);
+  fv_view->ReloadAED();
+  W->frame_cb = bind(&FVView::Frame, fv_view, _1, _2, _3);
+  W->shell = make_unique<Shell>(W);
 
   BindMap *binds = W->AddInputController(make_unique<BindMap>());
   // binds->Bind(key,         callback,         arg));
@@ -633,40 +644,39 @@ void MyApp::OnWindowStart(Window *W) {
   binds->Add(Key::Quote,     Bind::CB(bind(&Shell::console,  W->shell.get(), vector<string>())));
   binds->Add(Key::Escape,    Bind::CB(bind(&Shell::quit,     W->shell.get(), vector<string>())));
   binds->Add(Key::Return,    Bind::CB(bind(&Shell::grabmode, W->shell.get(), vector<string>())));
-  binds->Add(Key::LeftShift, Bind::TimeCB(bind(&Entity::RollLeft,   &fv_gui->room_gui->scene.cam, _1)));
-  binds->Add(Key::Space,     Bind::TimeCB(bind(&Entity::RollRight,  &fv_gui->room_gui->scene.cam, _1)));
-  binds->Add('w',            Bind::TimeCB(bind(&Entity::MoveFwd,    &fv_gui->room_gui->scene.cam, _1)));
-  binds->Add('s',            Bind::TimeCB(bind(&Entity::MoveRev,    &fv_gui->room_gui->scene.cam, _1)));
-  binds->Add('a',            Bind::TimeCB(bind(&Entity::MoveLeft,   &fv_gui->room_gui->scene.cam, _1)));
-  binds->Add('d',            Bind::TimeCB(bind(&Entity::MoveRight,  &fv_gui->room_gui->scene.cam, _1)));
-  binds->Add('q',            Bind::TimeCB(bind(&Entity::MoveDown,   &fv_gui->room_gui->scene.cam, _1)));
-  binds->Add('e',            Bind::TimeCB(bind(&Entity::MoveUp,     &fv_gui->room_gui->scene.cam, _1)));
+  binds->Add(Key::LeftShift, Bind::TimeCB(bind(&Entity::RollLeft,   &fv_view->room_view->scene.cam, _1)));
+  binds->Add(Key::Space,     Bind::TimeCB(bind(&Entity::RollRight,  &fv_view->room_view->scene.cam, _1)));
+  binds->Add('w',            Bind::TimeCB(bind(&Entity::MoveFwd,    &fv_view->room_view->scene.cam, _1)));
+  binds->Add('s',            Bind::TimeCB(bind(&Entity::MoveRev,    &fv_view->room_view->scene.cam, _1)));
+  binds->Add('a',            Bind::TimeCB(bind(&Entity::MoveLeft,   &fv_view->room_view->scene.cam, _1)));
+  binds->Add('d',            Bind::TimeCB(bind(&Entity::MoveRight,  &fv_view->room_view->scene.cam, _1)));
+  binds->Add('q',            Bind::TimeCB(bind(&Entity::MoveDown,   &fv_view->room_view->scene.cam, _1)));
+  binds->Add('e',            Bind::TimeCB(bind(&Entity::MoveUp,     &fv_view->room_view->scene.cam, _1)));
 
-  W->shell = make_unique<Shell>(W);
-  W->shell->Add("speech_client", bind(&AudioView::SpeechClientCmd,        fv_gui->audio_gui, _1));
-  W->shell->Add("draw",          bind(&AudioView::DrawCmd,                fv_gui->audio_gui, _1));
-  W->shell->Add("snap",          bind(&AudioView::SnapCmd,                fv_gui->audio_gui, _1));
-  W->shell->Add("decode",        bind(&AudioView::DecodeCmd,              fv_gui->audio_gui, _1));
-  W->shell->Add("netdecode",     bind(&AudioView::NetDecodeCmd,           fv_gui->audio_gui, _1));
-  W->shell->Add("synth",         bind(&AudioView::SynthCmd,               fv_gui->audio_gui, _1));
-  W->shell->Add("resynth",       bind(&AudioView::ResynthCmd,             fv_gui->audio_gui, _1));
-  W->shell->Add("sgtf",          bind(&AudioView::SpectogramTransformCmd, fv_gui->audio_gui, _1));
-  W->shell->Add("sgxf",          bind(&AudioView::SpectogramTransformCmd, fv_gui->audio_gui, _1));
-  W->shell->Add("server",        bind(&AudioView::ServerCmd,              fv_gui->audio_gui, _1));
-  W->shell->Add("startcamera",   bind(&VideoView::StartCameraCmd,         fv_gui->video_gui, _1));
+  W->shell->Add("speech_client", bind(&AudioView::SpeechClientCmd,        fv_view->audio_view, _1));
+  W->shell->Add("draw",          bind(&AudioView::DrawCmd,                fv_view->audio_view, _1));
+  W->shell->Add("snap",          bind(&AudioView::SnapCmd,                fv_view->audio_view, _1));
+  W->shell->Add("decode",        bind(&AudioView::DecodeCmd,              fv_view->audio_view, _1));
+  W->shell->Add("netdecode",     bind(&AudioView::NetDecodeCmd,           fv_view->audio_view, _1));
+  W->shell->Add("synth",         bind(&AudioView::SynthCmd,               fv_view->audio_view, _1));
+  W->shell->Add("resynth",       bind(&AudioView::ResynthCmd,             fv_view->audio_view, _1));
+  W->shell->Add("sgtf",          bind(&AudioView::SpectogramTransformCmd, fv_view->audio_view, _1));
+  W->shell->Add("sgxf",          bind(&AudioView::SpectogramTransformCmd, fv_view->audio_view, _1));
+  W->shell->Add("server",        bind(&AudioView::ServerCmd,              fv_view->audio_view, _1));
+  W->shell->Add("startcamera",   bind(&VideoView::StartCameraCmd,         fv_view->video_view, _1));
 
 #ifndef LFL_MOBILE
   AcousticModelFile *model = new AcousticModelFile();
-  if (model->Open(&app->localfs, "AcousticModel", app->FileName("").c_str()) < 0) return ERROR(-1, "am read ", app->FileName(""));
-  if (!(fv_gui->audio_gui->decodeModel = AcousticModel::FromModel1(model, true))) return ERROR(-1, "model create failed");
+  if (model->Open(&app->localfs, "AcousticModel", app->assetdir.c_str()) < 0) return ERROR(-1, "am read ", app->FileName(""));
+  if (!(fv_view->audio_view->decodeModel = AcousticModel::FromModel1(model, true))) return ERROR(-1, "model create failed");
   AcousticModel::ToCUDA(model);
 
   PronunciationDict::Instance(app);
-  VoiceModel *voice = (fv_gui->audio_gui->voice = make_unique<VoiceModel>()).get();
+  VoiceModel *voice = (fv_view->audio_view->voice = make_unique<VoiceModel>()).get();
   if (voice->Read(&app->localfs, app->FileName("").c_str()) < 0) return ERROR(-1, "voice read ", app->FileName(""));
 
-  fv_gui->stream = new HTTPServer::StreamResource(app->audio.get(), app->camera.get(), "flv", 32000, 300000);
-  app->httpd->AddURL("/stream.flv", fv_gui->stream);
+  fv_view->stream = new HTTPServer::StreamResource(app->audio.get(), app->camera.get(), "flv", 32000, 300000);
+  app->httpd->AddURL("/stream.flv", fv_view->stream);
 #endif
 }
 
